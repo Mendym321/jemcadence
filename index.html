@@ -151,6 +151,8 @@ select.finput{cursor:pointer;}
       <div class="logo-tag">Automation Suite</div>
     </div>
     <div style="display:flex;align-items:center;gap:14px">
+      <span id="sync-status" style="font-family:'DM Mono',monospace;font-size:0.6rem;letter-spacing:0.1em"></span>
+      <button id="undo-btn" onclick="undoSave()" style="display:none;align-items:center;gap:6px;background:var(--accent-light);border:1px solid var(--accent);border-radius:var(--radius-sm);padding:7px 13px;font-family:'Sora',sans-serif;font-size:0.72rem;font-weight:600;color:var(--accent);cursor:pointer">Undo last save</button>
       <span id="phase-info" style="font-family:'DM Mono',monospace;font-size:0.62rem;color:var(--text-dim);letter-spacing:0.15em;text-transform:uppercase"></span>
       <button class="btn-edit" onclick="openDrawer()">Edit Schedule</button>
     </div>
@@ -202,7 +204,7 @@ select.finput{cursor:pointer;}
   </div>
 </div>
 
-<script>
+<script type="module">
 // ─────────────────────────────────────────────
 // MONDAY CONFIG
 // ─────────────────────────────────────────────
@@ -273,8 +275,53 @@ function photoCapableDays(){
 // ─────────────────────────────────────────────
 // STATE
 // ─────────────────────────────────────────────
-const STORE = "jem_v7";
-let cfg = load();
+// ─────────────────────────────────────────────
+// FIREBASE SYNC
+// ─────────────────────────────────────────────
+import { initializeApp }                          from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { getFirestore, doc, getDoc, setDoc }      from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey:            "AIzaSyCDVS0UfMM3qBf2mP3zGfRoOiCYA4XwtKk",
+  authDomain:        "jem-cadence.firebaseapp.com",
+  projectId:         "jem-cadence",
+  storageBucket:     "jem-cadence.firebasestorage.app",
+  messagingSenderId: "740314160325",
+  appId:             "1:740314160325:web:dc2e6e98047563a81764ac",
+};
+
+const app = initializeApp(firebaseConfig);
+const db  = getFirestore(app);
+const CFG_DOC = doc(db, "schedule", "config");
+
+async function loadFromFirebase(){
+  setStatus("Loading...", false);
+  try {
+    const snap = await getDoc(CFG_DOC);
+    setStatus("", false);
+    return snap.exists() ? snap.data().value : clone(DEFAULTS);
+  } catch(e){
+    setStatus("Could not load — using defaults", true);
+    return clone(DEFAULTS);
+  }
+}
+
+async function saveToFirebase(newCfg){
+  await setDoc(CFG_DOC, { value: newCfg });
+}
+
+function setStatus(msg, isError){
+  const el = document.getElementById("sync-status");
+  if(!el) return;
+  el.innerText = msg;
+  el.style.color = isError ? "var(--red)" : "var(--text-dim)";
+}
+
+// ─────────────────────────────────────────────
+// STATE
+// ─────────────────────────────────────────────
+let cfg      = clone(DEFAULTS);
+let undoCfg  = null;
 let selected = { d:1, w:1, dateStr:"" };
 let activeTab = "fixed";
 
@@ -282,353 +329,7 @@ const DAY_NAMES = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","
 const DAY_SHORT = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 const DAY_CHIPS = ["Sun","Mon","Tue","Wed","Thu","Fri"];
 
-function load(){ try { const s=localStorage.getItem(STORE); return s?JSON.parse(s):clone(DEFAULTS); } catch { return clone(DEFAULTS); } }
-function save(){ localStorage.setItem(STORE, JSON.stringify(cfg)); }
-function clone(x){ return JSON.parse(JSON.stringify(x)); }
-
-// ─────────────────────────────────────────────
-// SCHEDULE LOGIC
-// ─────────────────────────────────────────────
-
-// Count how many active posting days have passed before this cell.
-// Active = not Shabbos, not a fixed-rule day.
-function postingSlot(targetW, targetD){
-  let slot = 0;
-  for(let w=1; w<=targetW; w++){
-    for(let d=0; d<7; d++){
-      if(d === 6) continue;
-      if(cfg.fixedRules.find(r => r.dayOfWeek === d)) continue;
-      if(w === targetW && d === targetD) return slot;
-      slot++;
-    }
-  }
-  return slot;
-}
-
-// What topic and type does this cell get?
-function cellMeta(d, w){
-  if(d === 6) return { topic:"Shabbos", type:"shabbos", isPhoto:false, isShabbos:true };
-
-  const fixed = cfg.fixedRules.find(r => r.dayOfWeek === d);
-  if(fixed) return { topic:fixed.topic, type:"fixed", isPhoto:false, isShabbos:false };
-
-  const slot = postingSlot(w, d);
-  const photoDays = photoCapableDays();
-
-  for(const item of cfg.rotatingItems){
-    const n = item.everyNDays || 7;
-    const offset = cfg.rotatingItems.indexOf(item);
-    if(slot % n === offset % n){
-      // Photo day = rotating item lands on a photo-capable day
-      const isPhoto = photoDays.includes(d);
-      return { topic:item.name, type:isPhoto?"photo":"rotating", isPhoto, isShabbos:false };
-    }
-  }
-
-  const pool = cfg.fillerTopics;
-  return { topic: pool.length ? pool[slot % pool.length] : "—", type:"filler", isPhoto:false, isShabbos:false };
-}
-
-// Which tasks run today?
-function tasksForDay(meta, d){
-  if(meta.isShabbos) return [];
-  return cfg.platforms
-    .filter(p => p.activeDays.length === 0 || p.activeDays.includes(d))
-    .map(p => {
-      const isPhotoSwap = meta.isPhoto && !!p.photoContent;
-      return {
-        label:       `${p.name} — ${isPhotoSwap ? p.photoContent : p.content}`,
-        isPhotoSwap,
-        mondayId:    p.mondayId ?? 0,
-        mondayName:  p.plainMonday
-          ? (p.name === "JEM.tv" ? "JEM.tv Update" : "Content Email")
-          : null,
-      };
-    });
-}
-
-// ─────────────────────────────────────────────
-// INSPECTOR
-// ─────────────────────────────────────────────
-function inspect(d, w){
-  const fd = dateOfCell(w, d);
-  selected = { d, w, dateStr: fd.toISOString().split("T")[0] };
-
-  document.querySelectorAll(".day-cell").forEach(c => c.classList.remove("sel"));
-  const cell = document.querySelector(`[data-w="${w}"][data-d="${d}"]`);
-  if(cell) cell.classList.add("sel");
-
-  const meta = cellMeta(d, w);
-  const fmt  = fd.toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric",year:"numeric"});
-  document.getElementById("insp-date").innerText  = fmt.toUpperCase();
-  document.getElementById("insp-topic").innerText = meta.topic;
-
-  const badge   = document.getElementById("insp-badge");
-  const taskSec = document.getElementById("insp-tasks");
-  const pushBtn = document.getElementById("btn-push");
-  const list    = document.getElementById("task-list");
-  list.innerHTML = "";
-
-  if(meta.isShabbos){
-    badge.style.display = "none";
-    taskSec.style.display = "block";
-    pushBtn.style.display = "none";
-    list.innerHTML = '<div class="shabbos-note">Rest. No tasks scheduled.</div>';
-    return;
-  }
-
-  const badgeMap = {
-    fixed:    { cls:"badge-fixed",    text:"Fixed Rule"   },
-    rotating: { cls:"badge-rotating", text:"Rotating"     },
-    photo:    { cls:"badge-photo",    text:"Photo Day"    },
-    filler:   { cls:"badge-filler",   text:"Filler Topic" },
-  };
-  const bm = badgeMap[meta.type];
-  badge.className    = `insp-badge ${bm.cls}`;
-  badge.innerText    = bm.text;
-  badge.style.display = "inline-block";
-  taskSec.style.display = "block";
-  pushBtn.style.display = "block";
-
-  tasksForDay(meta, d).forEach((t, i) => {
-    const el = document.createElement("div");
-    el.className = "task-row";
-    el.style.animationDelay = `${i * 0.04}s`;
-    el.innerHTML = `<div class="task-dot${t.isPhotoSwap?" red":""}"></div><span>${t.label}</span>`;
-    list.appendChild(el);
-  });
-}
-
-function dateOfCell(w, d){
-  const n = new Date(), s = new Date(n.getFullYear(), n.getMonth(), 1);
-  return new Date(n.getFullYear(), n.getMonth(), 1 + (w-1)*7 + (d - s.getDay()));
-}
-
-// ─────────────────────────────────────────────
-// MONDAY PUSH
-// ─────────────────────────────────────────────
-async function getHebrewDate(dateStr){
-  try {
-    const r = await fetch(`https://www.hebcal.com/converter?cfg=json&date=${dateStr}&g2h=1`);
-    const d = await r.json();
-    return `${d.hd} ${d.hm}`;
-  } catch { return null; }
-}
-
-async function pushToMonday(){
-  const btn   = document.getElementById("btn-push");
-  const meta  = cellMeta(selected.d, selected.w);
-  const tasks = tasksForDay(meta, selected.d);
-  btn.disabled = true; btn.innerText = "Sending...";
-
-  const heb = await getHebrewDate(selected.dateStr);
-
-  for(const task of tasks){
-    const name = task.mondayName
-      ? task.mondayName
-      : heb ? `${meta.topic} - ${heb}` : meta.topic;
-
-    const cols = JSON.stringify({ [COL_DATE]:{ date:selected.dateStr }, [COL_TYPE]:{ index:task.mondayId } });
-    const q    = `mutation { create_item(board_id:${MONDAY_BOARD}, item_name:${JSON.stringify(name)}, column_values:${JSON.stringify(cols)}) { id } }`;
-    try {
-      await fetch("https://api.monday.com/v2",{
-        method:"post",
-        headers:{ "Content-Type":"application/json", "Authorization":MONDAY_KEY, "API-Version":"2023-10" },
-        body: JSON.stringify({ query:q }),
-      });
-    } catch(e){ console.error(e); }
-  }
-  btn.innerText = "Sync Complete";
-  setTimeout(() => { btn.disabled=false; btn.innerText="Push to Monday.com"; }, 3000);
-}
-
-// ─────────────────────────────────────────────
-// CALENDAR BUILD
-// ─────────────────────────────────────────────
-function buildCalendar(){
-  const now = new Date();
-  document.getElementById("phase-info").innerText = now.toLocaleString("default",{month:"long",year:"numeric"}).toUpperCase();
-
-  const head = document.getElementById("cal-head");
-  const grid = document.getElementById("cal-grid");
-  head.innerHTML = ""; grid.innerHTML = "";
-  DAY_SHORT.forEach(d => head.innerHTML += `<div class="col-label">${d}</div>`);
-
-  for(let w=1; w<=4; w++){
-    for(let d=0; d<7; d++){
-      const meta    = cellMeta(d, w);
-      const cd      = dateOfCell(w, d);
-      const isToday = cd.toDateString() === now.toDateString();
-
-      const cell = document.createElement("div");
-      cell.className = ["day-cell", `t-${meta.type}`, isToday?"today":"", meta.isShabbos?"shabbos":""].filter(Boolean).join(" ");
-      cell.dataset.w = w; cell.dataset.d = d;
-      cell.onclick = () => { if(!meta.isShabbos) inspect(d, w); };
-      cell.innerHTML = `
-        <span class="cell-date">${cd.getDate()}</span>
-        <span class="cell-topic">${meta.topic}</span>
-        ${isToday ? '<span class="today-tag">TODAY</span>' : ""}
-      `;
-      grid.appendChild(cell);
-      if(isToday) selected = { d, w, dateStr: cd.toISOString().split("T")[0] };
-    }
-  }
-  inspect(selected.d, selected.w);
-}
-
-// ─────────────────────────────────────────────
-// DRAWER
-// ─────────────────────────────────────────────
-function openDrawer(){ renderTab(); document.getElementById("overlay").classList.add("open"); document.getElementById("drawer").classList.add("open"); }
-function closeDrawer(){ document.getElementById("overlay").classList.remove("open"); document.getElementById("drawer").classList.remove("open"); }
-function tab(name){
-  activeTab = name;
-  document.querySelectorAll(".dtab").forEach((t,i) => t.classList.toggle("on", ["fixed","rotating","filler","platforms"][i]===name));
-  renderTab();
-}
-function renderTab(){
-  const body = document.getElementById("drawer-body");
-  if(activeTab==="fixed")     renderFixed(body);
-  if(activeTab==="rotating")  renderRotating(body);
-  if(activeTab==="filler")    renderFiller(body);
-  if(activeTab==="platforms") renderPlatforms(body);
-}
-
-// ── Fixed Rules ──
-function renderFixed(body){
-  body.innerHTML = `
-    <div class="sec-title">Fixed Rules</div>
-    <div class="hint">A specific day of the week always gets this topic — overrides rotating items and filler.</div>
-    <div id="fixed-list" style="display:flex;flex-direction:column;gap:8px"></div>
-    <button class="btn-add" onclick="addFixed()">+ Add rule</button>
-  `;
-  drawFixed();
-}
-function drawFixed(){
-  const c = document.getElementById("fixed-list"); if(!c) return;
-  c.innerHTML = cfg.fixedRules.map((r,i) => `
-    <div class="card">
-      <div class="card-row">
-        <select class="finput" style="flex:0 0 130px" onchange="cfg.fixedRules[${i}].dayOfWeek=+this.value">
-          ${[0,1,2,3,4,5].map(d=>`<option value="${d}" ${r.dayOfWeek===d?"selected":""}>${DAY_NAMES[d]}</option>`).join("")}
-        </select>
-        <span style="font-size:0.72rem;color:var(--text-dim);white-space:nowrap;font-weight:600">is always</span>
-        <input class="finput" value="${r.topic}" placeholder="Topic" onchange="cfg.fixedRules[${i}].topic=this.value">
-        <button class="btn-del" onclick="cfg.fixedRules.splice(${i},1);drawFixed()">x</button>
-      </div>
-    </div>
-  `).join("") || `<div class="hint" style="text-align:center;padding:12px;border:1px dashed var(--border2);border-radius:8px">No fixed rules yet.</div>`;
-}
-function addFixed(){ cfg.fixedRules.push({dayOfWeek:0,topic:""}); drawFixed(); }
-
-// ── Rotating ──
-function renderRotating(body){
-  body.innerHTML = `
-    <div class="sec-title">Rotating Items</div>
-    <div class="hint">These cycle through available posting days in order. "Every N posting days" means N days where something is actually scheduled — Shabbos and fixed-rule days don't count. When a rotating item lands on a day with both WA and SM, it automatically becomes a photo day.</div>
-    <div id="rot-list" style="display:flex;flex-direction:column;gap:8px"></div>
-    <button class="btn-add" onclick="addRotating()">+ Add item</button>
-  `;
-  drawRotating();
-}
-function drawRotating(){
-  const c = document.getElementById("rot-list"); if(!c) return;
-  c.innerHTML = cfg.rotatingItems.map((item,i) => `
-    <div class="card">
-      <div class="card-row">
-        <input class="finput" value="${item.name}" placeholder="Item name" onchange="cfg.rotatingItems[${i}].name=this.value" style="flex:1;font-weight:600">
-        <button class="btn-del" onclick="cfg.rotatingItems.splice(${i},1);drawRotating()">x</button>
-      </div>
-      <div class="card-row">
-        <span style="font-size:0.72rem;color:var(--text-dim)">Every</span>
-        <input type="number" min="1" class="finput" style="width:60px;text-align:center" value="${item.everyNDays||7}" onchange="cfg.rotatingItems[${i}].everyNDays=+this.value||1">
-        <span style="font-size:0.72rem;color:var(--text-dim)">posting days</span>
-      </div>
-    </div>
-  `).join("") || `<div class="hint" style="text-align:center;padding:12px;border:1px dashed var(--border2);border-radius:8px">No rotating items yet.</div>`;
-}
-function addRotating(){ cfg.rotatingItems.push({name:"",everyNDays:7}); drawRotating(); }
-
-// ── Filler ──
-function renderFiller(body){
-  body.innerHTML = `
-    <div class="sec-title">Filler Topics</div>
-    <div class="hint">Fill any day not covered by a fixed rule or rotating item. Cycle through in order.</div>
-    <div class="tag-wrap" id="filler-tags" style="margin-top:10px"></div>
-    <div class="tag-add">
-      <input class="tag-input" id="filler-inp" placeholder="New topic..." onkeydown="if(event.key==='Enter')addFiller()">
-      <button class="btn-add-tag" onclick="addFiller()">+ Add</button>
-    </div>
-  `;
-  drawFiller();
-}
-function drawFiller(){
-  const c = document.getElementById("filler-tags"); if(!c) return;
-  c.innerHTML = cfg.fillerTopics.map((t,i) => `
-    <div class="tag">${t}<button class="tag-x" onclick="cfg.fillerTopics.splice(${i},1);drawFiller()">x</button></div>
-  `).join("");
-}
-function addFiller(){
-  const inp = document.getElementById("filler-inp"), v = inp.value.trim();
-  if(v && !cfg.fillerTopics.includes(v)){ cfg.fillerTopics.push(v); drawFiller(); }
-  inp.value = "";
-}
-
-// ── Platforms ──
-function renderPlatforms(body){
-  body.innerHTML = `
-    <div class="sec-title">Platforms</div>
-    <div class="hint">Each platform posts every day by default. Select specific days to restrict it. Photo days are automatic — any platform with a "photo day" label set will switch to that content when the day qualifies.</div>
-    <div id="plat-list" style="display:flex;flex-direction:column;gap:10px;margin-top:4px"></div>
-    <button class="btn-add" onclick="addPlatform()">+ Add platform</button>
-  `;
-  drawPlatforms();
-}
-function drawPlatforms(){
-  const c = document.getElementById("plat-list"); if(!c) return;
-  c.innerHTML = cfg.platforms.map((p,i) => {
-    const days = p.activeDays || [];
-    const chips = DAY_CHIPS.map((lbl,d) =>
-      `<div class="day-chip ${days.includes(d)?"on":""}" onclick="toggleDay(${i},${d})">${lbl}</div>`
-    ).join("");
-    return `
-      <div class="card">
-        <div class="card-row">
-          <input class="finput" value="${p.name}" placeholder="Platform name" onchange="cfg.platforms[${i}].name=this.value" style="flex:1;font-weight:600">
-          <input type="number" min="0" class="finput" style="width:52px;text-align:center" title="Monday.com type ID" value="${p.mondayId??0}" onchange="cfg.platforms[${i}].mondayId=+this.value||0">
-          <button class="btn-del" onclick="cfg.platforms.splice(${i},1);drawPlatforms()">x</button>
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-          <div>
-            <div class="sublabel">Normal days</div>
-            <input class="finput" value="${p.content||""}" placeholder="e.g. Daily Video" onchange="cfg.platforms[${i}].content=this.value">
-          </div>
-          <div>
-            <div class="sublabel">Photo days</div>
-            <input class="finput" value="${p.photoContent||""}" placeholder="Leave blank if N/A" onchange="cfg.platforms[${i}].photoContent=this.value||null">
-          </div>
-        </div>
-        <div>
-          <div class="sublabel" style="margin-bottom:6px">Active days <span style="text-transform:none;letter-spacing:0;font-size:0.65rem">(none selected = every day)</span></div>
-          <div class="day-chips">${chips}</div>
-        </div>
-      </div>
-    `;
-  }).join("");
-}
-function toggleDay(pi, d){
-  const days = cfg.platforms[pi].activeDays || [];
-  const idx  = days.indexOf(d);
-  if(idx === -1) days.push(d); else days.splice(idx,1);
-  cfg.platforms[pi].activeDays = days;
-  drawPlatforms();
-}
-function addPlatform(){ cfg.platforms.push({name:"",content:"",photoContent:null,activeDays:[],mondayId:0,plainMonday:false}); drawPlatforms(); }
-
-function saveAndClose(){ save(); closeDrawer(); buildCalendar(); }
-function resetDefaults(){ if(confirm("Reset everything to defaults?")){ cfg=clone(DEFAULTS); save(); closeDrawer(); buildCalendar(); } }
-
-buildCalendar();
+function clone(x){ return JSON.parse(JSON.stringify(x)); }(async () => { cfg = await loadFromGitHub(); buildCalendar(); })();
 </script>
 </body>
 </html>
