@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>JEM Cadence</title>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=DM+Mono:wght@400;500&family=Sora:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
 <style>
 :root {
   --bg:#f5f2ee; --surface:#fff; --surface2:#faf8f5;
@@ -204,7 +206,7 @@ select.finput{cursor:pointer;}
   </div>
 </div>
 
-<script type="module">
+<script>
 // ─────────────────────────────────────────────
 // MONDAY CONFIG
 // ─────────────────────────────────────────────
@@ -278,8 +280,6 @@ function photoCapableDays(){
 // ─────────────────────────────────────────────
 // FIREBASE SYNC
 // ─────────────────────────────────────────────
-import { initializeApp }                          from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { getFirestore, doc, getDoc, setDoc }      from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
 const firebaseConfig = {
   apiKey:            "AIzaSyCDVS0UfMM3qBf2mP3zGfRoOiCYA4XwtKk",
@@ -290,16 +290,22 @@ const firebaseConfig = {
   appId:             "1:740314160325:web:dc2e6e98047563a81764ac",
 };
 
-const app = initializeApp(firebaseConfig);
-const db  = getFirestore(app);
-const CFG_DOC = doc(db, "schedule", "config");
+// Firebase is loaded via CDN compat scripts in <head>
+// so we can use firebase.firestore() without ES module imports
+
+let db;
+function initFirebase(){
+  if(!firebase.apps.length) firebase.initializeApp(firebaseConfig);
+  db = firebase.firestore();
+}
 
 async function loadFromFirebase(){
+  initFirebase();
   setStatus("Loading...", false);
   try {
-    const snap = await getDoc(CFG_DOC);
+    const snap = await db.collection("schedule").doc("config").get();
     setStatus("", false);
-    return snap.exists() ? snap.data().value : clone(DEFAULTS);
+    return snap.exists ? snap.data().value : clone(DEFAULTS);
   } catch(e){
     setStatus("Could not load — using defaults", true);
     return clone(DEFAULTS);
@@ -307,7 +313,8 @@ async function loadFromFirebase(){
 }
 
 async function saveToFirebase(newCfg){
-  await setDoc(CFG_DOC, { value: newCfg });
+  initFirebase();
+  await db.collection("schedule").doc("config").set({ value: newCfg });
 }
 
 function setStatus(msg, isError){
@@ -329,7 +336,7 @@ const DAY_NAMES = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","
 const DAY_SHORT = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 const DAY_CHIPS = ["Sun","Mon","Tue","Wed","Thu","Fri"];
 
-function clone(x){ return JSON.parse(JSON.stringify(x)); }(async () => { cfg = await loadFromGitHub(); buildCalendar(); })();
+function clone(x){ return JSON.parse(JSON.stringify(x)); }(async () => { cfg = await loadFromFirebase(); buildCalendar(); })();
 </script>
 </body>
 </html>
