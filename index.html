@@ -314,81 +314,11 @@ function clone(x){ return JSON.parse(JSON.stringify(x)); }
 let jewishHolidays = {};
 let hebrewDates    = {}; // "YYYY-MM-DD" -> { hd, hm, hy, full }
 
-// Convert Gregorian to Hebrew date using the standard algorithm
-// Returns { hd, hm, hy, full } e.g. { hd:22, hm:"Iyar", hy:5786, full:"22 Iyar 5786" }
-function gregToHebrew(year, month, day){
-  const HEBREW_MONTHS = ["Nisan","Iyar","Sivan","Tamuz","Av","Elul","Tishrei","Cheshvan","Kislev","Tevet","Shvat","Adar","Adar II"];
-  // Julian Day Number
-  const a = Math.floor((14 - month) / 12);
-  const y = year + 4800 - a;
-  const mo = month + 12 * a - 3;
-  let jdn = day + Math.floor((153*mo+2)/5) + 365*y + Math.floor(y/4) - Math.floor(y/100) + Math.floor(y/400) - 32045;
-
-  // Hebrew calendar epoch: 1 Tishrei 1 = JDN 347997
-  const EPOCH = 347997;
-  let d = jdn - EPOCH;
-
-  // Approximate Hebrew year
-  let hy = Math.floor((d * 98496.0) / 35975351.0) + 1;
-  while(hebrewYearStart(hy + 1) <= jdn) hy++;
-  while(hebrewYearStart(hy) > jdn) hy--;
-
-  const startOfYear = hebrewYearStart(hy);
-  let dayOfYear = jdn - startOfYear + 1;
-
-  const monthLengths = hebrewMonthLengths(hy);
-  let hm = 0;
-  for(let i = 0; i < monthLengths.length; i++){
-    if(dayOfYear <= monthLengths[i]){ hm = i; break; }
-    dayOfYear -= monthLengths[i];
-  }
-
-  const monthName = HEBREW_MONTHS[hm] || "?";
-  return { hd: dayOfYear, hm: monthName, hy, full: `${dayOfYear} ${monthName} ${hy}` };
-}
-
-function hebrewYearStart(hy){
-  const months = Math.floor((235 * hy - 234) / 19);
-  const parts  = 12084 + 13753 * months;
-  let day      = months * 29 + Math.floor(parts / 25920);
-  if((3 * (day + 1)) % 7 < 3) day++;
-  return day + 347997;
-}
-
-function hebrewMonthLengths(hy){
-  const isLeap = ((7 * hy + 1) % 19) < 7;
-  const yearLength = hebrewYearStart(hy + 1) - hebrewYearStart(hy);
-  const isShort = yearLength % 10 === 3;
-  const isLong  = yearLength % 10 === 5;
-  const m = [30,29,30,29,30,29,30, isLong?30:29, isShort?29:30, 29,30,29];
-  if(isLeap) m.push(29);
-  return m;
-}
-
-function buildHebrewDatesForMonth(){
-  const now = new Date();
-  const y = now.getFullYear(), m = now.getMonth();
-  const map = {};
-  // Build for enough days to cover 4 weeks
-  for(let day = 1; day <= 31; day++){
-    const d = new Date(y, m, day);
-    if(d.getMonth() !== m) break;
-    const key = d.toISOString().split("T")[0];
-    map[key] = gregToHebrew(y, m + 1, day);
-  }
-  hebrewDates = map;
-  console.log("[Hebrew] Built dates locally, sample today:", hebrewDates[now.toISOString().split("T")[0]]);
-}
-
 async function fetchHolidays(){
   const now = new Date();
   const y = now.getFullYear(), m = now.getMonth() + 1;
-  console.log("[Hebcal] Fetching holidays for", y, m);
 
-  // Build Hebrew dates client-side (no API needed)
-  buildHebrewDatesForMonth();
-
-  // Fetch holidays from Hebcal
+  // Fetch holidays
   try {
     const url = `https://www.hebcal.com/hebcal?v=1&cfg=json&year=${y}&month=${m}&maj=on&min=on&mod=on&nx=on&mf=on&ss=on&s=on&i=off&geo=none`;
     const res  = await fetch(url);
@@ -401,11 +331,39 @@ async function fetchHolidays(){
       }
     });
     jewishHolidays = map;
-    console.log("[Hebcal] Holidays loaded:", Object.keys(jewishHolidays).length, "days");
+    console.log("[Hebcal] Holidays loaded:", Object.keys(jewishHolidays).length);
   } catch(e){
-    console.error("[Hebcal] Holidays fetch failed:", e);
+    console.error("[Hebcal] Holidays failed:", e);
     jewishHolidays = {};
   }
+
+  // Fetch Hebrew date for every day shown on the calendar (28 days)
+  // Reuses the same converter endpoint that works for Monday export
+  const dateMap = {};
+  const start   = new Date(now.getFullYear(), now.getMonth(), 1);
+  const fetches = [];
+  for(let i = 0; i < 28; i++){
+    const d   = new Date(start);
+    d.setDate(start.getDate() + i);
+    const key = d.toISOString().split("T")[0];
+    fetches.push(
+      fetch(`https://www.hebcal.com/converter?cfg=json&date=${key}&g2h=1`)
+        .then(r => r.json())
+        .then(data => {
+          dateMap[key] = {
+            hd:   data.hd,
+            hm:   data.hm,
+            hy:   data.hy,
+            full: `${data.hd} ${data.hm} ${data.hy}`,
+          };
+        })
+        .catch(() => {})
+    );
+  }
+  await Promise.all(fetches);
+  hebrewDates = dateMap;
+  const today = now.toISOString().split("T")[0];
+  console.log("[Hebcal] Hebrew dates loaded:", Object.keys(hebrewDates).length, "| Today:", hebrewDates[today]?.full);
 }
 
 // ─────────────────────────────────────────────
