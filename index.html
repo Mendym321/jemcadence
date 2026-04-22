@@ -564,10 +564,11 @@ function buildCalendar(){
       cell.dataset.w = w; cell.dataset.d = d;
       cell.onclick = () => { if(!meta.isShabbos) inspect(d, w); };
       const hdate   = hebrewDates[dateStr];
+      const hdateDisplay = hdate ? `${hdate.hd} ${hdate.hm}` : "";
       cell.innerHTML = `
         <div class="cell-top-row">
           <span class="cell-date">${cd.getDate()}</span>
-          ${hdate ? `<span class="cell-hdate">${hdate.hebrew}</span>` : ""}
+          ${hdateDisplay ? `<span class="cell-hdate">${hdateDisplay}</span>` : ""}
         </div>
         <span class="cell-topic">${meta.topic}</span>
         ${holiday ? `<span class="holiday-tag">${holiday}</span>` : ""}
