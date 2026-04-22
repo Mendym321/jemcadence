@@ -49,8 +49,7 @@ header{display:flex;justify-content:space-between;align-items:center;margin-bott
 .task-list{display:flex;flex-direction:column;gap:5px;}
 .task-row{display:flex;align-items:center;gap:10px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 13px;font-size:0.8rem;font-weight:500;color:var(--text-mid);transition:all .15s;animation:fadeUp .18s ease both;}
 .task-row:hover{border-color:var(--primary);color:var(--text);background:var(--primary-light);}
-.task-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;background:var(--primary);}
-.task-dot.red{background:var(--red);}
+.task-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;}
 .shabbos-note{font-family:'Playfair Display',serif;font-style:italic;color:var(--text-dim);font-size:0.95rem;padding:22px;text-align:center;border:1px dashed var(--border2);border-radius:var(--radius-sm);}
 .btn-push{width:100%;margin-top:18px;padding:13px;background:var(--green);color:white;border:none;border-radius:var(--radius-sm);font-family:'Sora',sans-serif;font-size:0.78rem;font-weight:700;letter-spacing:0.06em;cursor:pointer;transition:all .2s;box-shadow:0 2px 8px rgba(21,122,74,0.2);}
 .btn-push:hover{background:#0f6038;transform:translateY(-1px);}
@@ -89,6 +88,8 @@ header{display:flex;justify-content:space-between;align-items:center;margin-bott
 .today-tag{font-family:'DM Mono',monospace;font-size:0.48rem;padding:2px 6px;border-radius:4px;margin-top:auto;background:var(--accent-light);color:var(--accent);border:1px solid rgba(200,120,26,0.2);display:inline-block;}
 .holiday-tag{font-family:'DM Mono',monospace;font-size:0.46rem;padding:2px 5px;border-radius:4px;background:#f0f7ff;color:#1a56db;border:1px solid rgba(26,86,219,0.2);display:inline-block;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;}
 .day-cell.has-holiday{border-top:2px solid rgba(26,86,219,0.4);}
+.cell-hdate{font-family:'DM Mono',monospace;font-size:0.56rem;color:var(--text-dim);text-align:right;}
+.cell-top-row{display:flex;justify-content:space-between;align-items:flex-start;}
 
 /* platform color dots */
 .dot-0{background:#25d366;}
@@ -311,10 +312,13 @@ function clone(x){ return JSON.parse(JSON.stringify(x)); }
 // Map of "YYYY-MM-DD" -> holiday name string
 // ─────────────────────────────────────────────
 let jewishHolidays = {};
+let hebrewDates    = {}; // "YYYY-MM-DD" -> { day: "כ״ב", full: "22 Iyar" }
 
 async function fetchHolidays(){
   const now = new Date();
   const y = now.getFullYear(), m = now.getMonth() + 1;
+
+  // Fetch holidays
   try {
     const res  = await fetch(`https://www.hebcal.com/hebcal?v=1&cfg=json&year=${y}&month=${m}&maj=on&min=on&mod=on&nx=on&mf=on&ss=on&s=on&i=off&geo=none`);
     const data = await res.json();
@@ -322,12 +326,31 @@ async function fetchHolidays(){
     (data.items || []).forEach(item => {
       if(item.category === "holiday" || item.category === "roshchodesh"){
         const date = item.date.slice(0,10);
-        // keep only the first holiday per day for space
         if(!map[date]) map[date] = item.title;
       }
     });
     jewishHolidays = map;
   } catch(e){ jewishHolidays = {}; }
+
+  // Fetch Hebrew dates for the whole month via batch converter
+  // Start from the 1st of the month, get 31 days
+  try {
+    const startDate = `${y}-${String(m).padStart(2,"0")}-01`;
+    const res  = await fetch(`https://www.hebcal.com/converter?cfg=json&date=${startDate}&g2h=1&ndays=31`);
+    const data = await res.json();
+    const map  = {};
+    // response has hdates object keyed by "YYYY-MM-DD"
+    Object.entries(data.hdates || {}).forEach(([greg, heb]) => {
+      map[greg] = {
+        hebrew: heb.hebrew,
+        hd:     heb.hd,
+        hm:     heb.hm,
+        hy:     heb.hy,
+        full:   `${heb.hd} ${heb.hm} ${heb.hy}`,
+      };
+    });
+    hebrewDates = map;
+  } catch(e){ hebrewDates = {}; }
 }
 
 // ─────────────────────────────────────────────
@@ -405,7 +428,9 @@ function inspect(d, w){
 
   const meta = cellMeta(d, w);
   const fmt  = fd.toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric",year:"numeric"});
-  document.getElementById("insp-date").innerText  = fmt.toUpperCase();
+  const hdate = hebrewDates[selected.dateStr];
+  document.getElementById("insp-date").innerHTML =
+    `<span>${fmt.toUpperCase()}</span>${hdate ? `<span style="font-family:'DM Mono',monospace;font-size:0.58rem;color:var(--text-dim);margin-left:10px;letter-spacing:0.05em">${hdate.full.toUpperCase()}</span>` : ""}`;
   document.getElementById("insp-topic").innerText = meta.topic;
 
   const badge   = document.getElementById("insp-badge");
@@ -521,8 +546,12 @@ function buildCalendar(){
       ].filter(Boolean).join(" ");
       cell.dataset.w = w; cell.dataset.d = d;
       cell.onclick = () => { if(!meta.isShabbos) inspect(d, w); };
+      const hdate   = hebrewDates[dateStr];
       cell.innerHTML = `
-        <span class="cell-date">${cd.getDate()}</span>
+        <div class="cell-top-row">
+          <span class="cell-date">${cd.getDate()}</span>
+          ${hdate ? `<span class="cell-hdate">${hdate.hebrew}</span>` : ""}
+        </div>
         <span class="cell-topic">${meta.topic}</span>
         ${holiday ? `<span class="holiday-tag">${holiday}</span>` : ""}
         ${isToday ? '<span class="today-tag">TODAY</span>' : ""}
