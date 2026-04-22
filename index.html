@@ -317,11 +317,16 @@ let hebrewDates    = {}; // "YYYY-MM-DD" -> { day: "כ״ב", full: "22 Iyar" }
 async function fetchHolidays(){
   const now = new Date();
   const y = now.getFullYear(), m = now.getMonth() + 1;
+  console.log("[Hebcal] Fetching for", y, m);
 
   // Fetch holidays
   try {
-    const res  = await fetch(`https://www.hebcal.com/hebcal?v=1&cfg=json&year=${y}&month=${m}&maj=on&min=on&mod=on&nx=on&mf=on&ss=on&s=on&i=off&geo=none`);
+    const url = `https://www.hebcal.com/hebcal?v=1&cfg=json&year=${y}&month=${m}&maj=on&min=on&mod=on&nx=on&mf=on&ss=on&s=on&i=off&geo=none`;
+    console.log("[Hebcal] Holidays URL:", url);
+    const res  = await fetch(url);
+    console.log("[Hebcal] Holidays status:", res.status);
     const data = await res.json();
+    console.log("[Hebcal] Holidays raw:", data);
     const map  = {};
     (data.items || []).forEach(item => {
       if(item.category === "holiday" || item.category === "roshchodesh"){
@@ -330,16 +335,22 @@ async function fetchHolidays(){
       }
     });
     jewishHolidays = map;
-  } catch(e){ jewishHolidays = {}; }
+    console.log("[Hebcal] Holidays map:", jewishHolidays);
+  } catch(e){
+    console.error("[Hebcal] Holidays fetch failed:", e);
+    jewishHolidays = {};
+  }
 
-  // Fetch Hebrew dates for the whole month via batch converter
-  // Start from the 1st of the month, get 31 days
+  // Fetch Hebrew dates batch
   try {
     const startDate = `${y}-${String(m).padStart(2,"0")}-01`;
-    const res  = await fetch(`https://www.hebcal.com/converter?cfg=json&date=${startDate}&g2h=1&ndays=31`);
+    const url = `https://www.hebcal.com/converter?cfg=json&date=${startDate}&g2h=1&ndays=31`;
+    console.log("[Hebcal] Converter URL:", url);
+    const res  = await fetch(url);
+    console.log("[Hebcal] Converter status:", res.status);
     const data = await res.json();
+    console.log("[Hebcal] Converter raw:", data);
     const map  = {};
-    // response has hdates object keyed by "YYYY-MM-DD"
     Object.entries(data.hdates || {}).forEach(([greg, heb]) => {
       map[greg] = {
         hebrew: heb.hebrew,
@@ -350,7 +361,12 @@ async function fetchHolidays(){
       };
     });
     hebrewDates = map;
-  } catch(e){ hebrewDates = {}; }
+    console.log("[Hebcal] Hebrew dates map:", hebrewDates);
+    console.log("[Hebcal] Sample today:", hebrewDates[new Date().toISOString().split("T")[0]]);
+  } catch(e){
+    console.error("[Hebcal] Converter fetch failed:", e);
+    hebrewDates = {};
+  }
 }
 
 // ─────────────────────────────────────────────
@@ -792,8 +808,13 @@ async function undoSave(){
 
 // ── INIT ──
 (async () => {
+  console.log("[Init] Starting...");
   [cfg] = await Promise.all([loadCfg(), fetchHolidays()]);
+  console.log("[Init] cfg loaded:", cfg ? "OK" : "FAILED");
+  console.log("[Init] hebrewDates count:", Object.keys(hebrewDates).length);
+  console.log("[Init] jewishHolidays count:", Object.keys(jewishHolidays).length);
   buildCalendar();
+  console.log("[Init] Calendar built.");
 })();
 </script>
 </body>
