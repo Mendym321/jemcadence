@@ -87,6 +87,26 @@ header{display:flex;justify-content:space-between;align-items:center;margin-bott
 .day-cell.today .cell-date{color:var(--accent);font-weight:700;}
 .cell-topic{font-size:0.68rem;font-weight:600;color:var(--text-mid);line-height:1.3;}
 .today-tag{font-family:'DM Mono',monospace;font-size:0.48rem;padding:2px 6px;border-radius:4px;margin-top:auto;background:var(--accent-light);color:var(--accent);border:1px solid rgba(200,120,26,0.2);display:inline-block;}
+.holiday-tag{font-family:'DM Mono',monospace;font-size:0.46rem;padding:2px 5px;border-radius:4px;background:#f0f7ff;color:#1a56db;border:1px solid rgba(26,86,219,0.2);display:inline-block;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;}
+.day-cell.has-holiday{border-top:2px solid rgba(26,86,219,0.4);}
+
+/* platform color dots */
+.dot-0{background:#25d366;}
+.dot-1{background:#e1306c;}
+.dot-2{background:#1da1f2;}
+.dot-3{background:#a25ddc;}
+.dot-4{background:#f59e0b;}
+.dot-5{background:#ff0000;}
+.dot-6{background:#6b7280;}
+/* platform color pills in inspector */
+.pill-0{background:#d4f7e4;color:#157a4a;border:1px solid rgba(21,122,74,0.2);}
+.pill-1{background:#fce4ef;color:#b5154f;border:1px solid rgba(181,21,79,0.2);}
+.pill-2{background:#ddf1fd;color:#0c6ea8;border:1px solid rgba(12,110,168,0.2);}
+.pill-3{background:#f0ebff;color:#6d28d9;border:1px solid rgba(109,40,217,0.2);}
+.pill-4{background:#fef3c7;color:#92400e;border:1px solid rgba(146,64,14,0.2);}
+.pill-5{background:#fee2e2;color:#991b1b;border:1px solid rgba(153,27,27,0.2);}
+.pill-6{background:#f3f4f6;color:#374151;border:1px solid rgba(55,65,81,0.2);}
+.task-pill{display:inline-block;font-size:0.7rem;font-weight:600;padding:2px 9px;border-radius:20px;margin-left:auto;flex-shrink:0;}
 
 /* DRAWER */
 .overlay{position:fixed;inset:0;background:rgba(26,22,18,0.4);z-index:100;opacity:0;pointer-events:none;transition:opacity .25s;backdrop-filter:blur(3px);}
@@ -231,14 +251,12 @@ const COL_TYPE     = "color_mkqem20m";
 
 const DEFAULTS = {
   platforms: [
-    // name            | content              | photoContent         | activeDays      | mondayId | plainMonday
-    { name:"WhatsApp",          content:"Daily Video",   photoContent:"Photo Blast",   activeDays:[],    mondayId:0,  plainMonday:false },
-    { name:"SM Video",          content:"Video",         photoContent:"Photo Post",    activeDays:[0,2,4], mondayId:6,  plainMonday:false },
-    // X posts on same days as SM, but is NOT photo-aware (always posts regardless)
-    { name:"X (Twitter)",       content:"Post",          photoContent:null,            activeDays:[0,2,4], mondayId:4,  plainMonday:false },
-    { name:"JEM.tv",            content:"Update",        photoContent:null,            activeDays:[1,4], mondayId:11, plainMonday:true  },
-    { name:"JEM Members Email", content:"Email",         photoContent:null,            activeDays:[4],   mondayId:10, plainMonday:true  },
-    { name:"YT Community",      content:"Post",          photoContent:null,            activeDays:[5],   mondayId:6,  plainMonday:false  },
+    { name:"WhatsApp",          content:"Daily Video",   photoContent:"Photo Blast",   activeDays:[],    mondayId:0,  plainMonday:false, colorIdx:0 },
+    { name:"SM Video",          content:"Video",         photoContent:"Photo Post",    activeDays:[0,2,4], mondayId:6,  plainMonday:false, colorIdx:1 },
+    { name:"X (Twitter)",       content:"Post",          photoContent:null,            activeDays:[0,2,4], mondayId:4,  plainMonday:false, colorIdx:2 },
+    { name:"JEM.tv",            content:"Update",        photoContent:null,            activeDays:[1,4], mondayId:11, plainMonday:true,  colorIdx:3 },
+    { name:"JEM Members Email", content:"Email",         photoContent:null,            activeDays:[4],   mondayId:10, plainMonday:true,  colorIdx:4 },
+    { name:"YT Community",      content:"Post",          photoContent:null,            activeDays:[5],   mondayId:6,  plainMonday:false,  colorIdx:5 },
   ],
 
   // Fixed rules: specific day always gets this topic, overrides rotating & filler.
@@ -287,6 +305,30 @@ const DAY_SHORT = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 const DAY_CHIPS = ["Sun","Mon","Tue","Wed","Thu","Fri"];
 
 function clone(x){ return JSON.parse(JSON.stringify(x)); }
+
+// ─────────────────────────────────────────────
+// JEWISH HOLIDAYS (fetched from Hebcal on load)
+// Map of "YYYY-MM-DD" -> holiday name string
+// ─────────────────────────────────────────────
+let jewishHolidays = {};
+
+async function fetchHolidays(){
+  const now = new Date();
+  const y = now.getFullYear(), m = now.getMonth() + 1;
+  try {
+    const res  = await fetch(`https://www.hebcal.com/hebcal?v=1&cfg=json&year=${y}&month=${m}&maj=on&min=on&mod=on&nx=on&mf=on&ss=on&s=on&i=off&geo=none`);
+    const data = await res.json();
+    const map  = {};
+    (data.items || []).forEach(item => {
+      if(item.category === "holiday" || item.category === "roshchodesh"){
+        const date = item.date.slice(0,10);
+        // keep only the first holiday per day for space
+        if(!map[date]) map[date] = item.title;
+      }
+    });
+    jewishHolidays = map;
+  } catch(e){ jewishHolidays = {}; }
+}
 
 // ─────────────────────────────────────────────
 // SCHEDULE LOGIC
@@ -342,6 +384,7 @@ function tasksForDay(meta, d){
         label:       `${p.name} — ${isPhotoSwap ? p.photoContent : p.content}`,
         isPhotoSwap,
         mondayId:    p.mondayId ?? 0,
+        colorIdx:    p.colorIdx ?? 6,
         mondayName:  p.plainMonday
           ? (p.name === "JEM.tv" ? "JEM.tv Update" : "Content Email")
           : null,
@@ -396,7 +439,12 @@ function inspect(d, w){
     const el = document.createElement("div");
     el.className = "task-row";
     el.style.animationDelay = `${i * 0.04}s`;
-    el.innerHTML = `<div class="task-dot${t.isPhotoSwap?" red":""}"></div><span>${t.label}</span>`;
+    const [platName, contentLabel] = t.label.split(" — ");
+    el.innerHTML = `
+      <div class="task-dot dot-${t.colorIdx}"></div>
+      <span style="flex:1">${platName}</span>
+      <span class="task-pill pill-${t.colorIdx}">${contentLabel}</span>
+    `;
     list.appendChild(el);
   });
 }
@@ -461,18 +509,26 @@ function buildCalendar(){
       const meta    = cellMeta(d, w);
       const cd      = dateOfCell(w, d);
       const isToday = cd.toDateString() === now.toDateString();
+      const dateStr = cd.toISOString().split("T")[0];
+      const holiday = jewishHolidays[dateStr] || null;
 
       const cell = document.createElement("div");
-      cell.className = ["day-cell", `t-${meta.type}`, isToday?"today":"", meta.isShabbos?"shabbos":""].filter(Boolean).join(" ");
+      cell.className = [
+        "day-cell", `t-${meta.type}`,
+        isToday ? "today" : "",
+        meta.isShabbos ? "shabbos" : "",
+        holiday ? "has-holiday" : "",
+      ].filter(Boolean).join(" ");
       cell.dataset.w = w; cell.dataset.d = d;
       cell.onclick = () => { if(!meta.isShabbos) inspect(d, w); };
       cell.innerHTML = `
         <span class="cell-date">${cd.getDate()}</span>
         <span class="cell-topic">${meta.topic}</span>
+        ${holiday ? `<span class="holiday-tag">${holiday}</span>` : ""}
         ${isToday ? '<span class="today-tag">TODAY</span>' : ""}
       `;
       grid.appendChild(cell);
-      if(isToday) selected = { d, w, dateStr: cd.toISOString().split("T")[0] };
+      if(isToday) selected = { d, w, dateStr };
     }
   }
   inspect(selected.d, selected.w);
@@ -625,7 +681,7 @@ function toggleDay(pi, d){
   cfg.platforms[pi].activeDays = days;
   drawPlatforms();
 }
-function addPlatform(){ cfg.platforms.push({name:"",content:"",photoContent:null,activeDays:[],mondayId:0,plainMonday:false}); drawPlatforms(); }
+function addPlatform(){ cfg.platforms.push({name:"",content:"",photoContent:null,activeDays:[],mondayId:0,plainMonday:false,colorIdx:6}); drawPlatforms(); }
 
 // ── FIREBASE ──
 firebase.initializeApp({
@@ -706,7 +762,10 @@ async function undoSave(){
 }
 
 // ── INIT ──
-(async () => { cfg = await loadCfg(); buildCalendar(); })();
+(async () => {
+  [cfg] = await Promise.all([loadCfg(), fetchHolidays()]);
+  buildCalendar();
+})();
 </script>
 </body>
 </html>
