@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>JEM Cadence</title>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=DM+Mono:wght@400;500&family=Sora:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
 <style>
 :root {
   --bg:#f5f2ee; --surface:#fff; --surface2:#faf8f5;
@@ -151,6 +153,8 @@ select.finput{cursor:pointer;}
       <div class="logo-tag">Automation Suite</div>
     </div>
     <div style="display:flex;align-items:center;gap:14px">
+      <span id="sync-status" style="font-family:'DM Mono',monospace;font-size:0.6rem;letter-spacing:0.1em"></span>
+      <button id="undo-btn" onclick="undoSave()" style="display:none;align-items:center;gap:6px;background:var(--accent-light);border:1px solid var(--accent);border-radius:var(--radius-sm);padding:7px 13px;font-family:'Sora',sans-serif;font-size:0.72rem;font-weight:600;color:var(--accent);cursor:pointer">Undo last save</button>
       <span id="phase-info" style="font-family:'DM Mono',monospace;font-size:0.62rem;color:var(--text-dim);letter-spacing:0.15em;text-transform:uppercase"></span>
       <button class="btn-edit" onclick="openDrawer()">Edit Schedule</button>
     </div>
@@ -272,9 +276,9 @@ function photoCapableDays(){
 
 // ─────────────────────────────────────────────
 // STATE
+// cfg starts as DEFAULTS, gets overwritten by Firebase on init
 // ─────────────────────────────────────────────
-const STORE = "jem_v7";
-let cfg = load();
+let cfg = clone(DEFAULTS);
 let selected = { d:1, w:1, dateStr:"" };
 let activeTab = "fixed";
 
@@ -282,8 +286,6 @@ const DAY_NAMES = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","
 const DAY_SHORT = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 const DAY_CHIPS = ["Sun","Mon","Tue","Wed","Thu","Fri"];
 
-function load(){ try { const s=localStorage.getItem(STORE); return s?JSON.parse(s):clone(DEFAULTS); } catch { return clone(DEFAULTS); } }
-function save(){ localStorage.setItem(STORE, JSON.stringify(cfg)); }
 function clone(x){ return JSON.parse(JSON.stringify(x)); }
 
 // ─────────────────────────────────────────────
@@ -625,10 +627,86 @@ function toggleDay(pi, d){
 }
 function addPlatform(){ cfg.platforms.push({name:"",content:"",photoContent:null,activeDays:[],mondayId:0,plainMonday:false}); drawPlatforms(); }
 
-function saveAndClose(){ save(); closeDrawer(); buildCalendar(); }
-function resetDefaults(){ if(confirm("Reset everything to defaults?")){ cfg=clone(DEFAULTS); save(); closeDrawer(); buildCalendar(); } }
+// ── FIREBASE ──
+firebase.initializeApp({
+  apiKey:            "AIzaSyCDVS0UfMM3qBf2mP3zGfRoOiCYA4XwtKk",
+  authDomain:        "jem-cadence.firebaseapp.com",
+  projectId:         "jem-cadence",
+  storageBucket:     "jem-cadence.firebasestorage.app",
+  messagingSenderId: "740314160325",
+  appId:             "1:740314160325:web:dc2e6e98047563a81764ac",
+});
+const db     = firebase.firestore();
+const CFGDOC = db.collection("schedule").doc("config");
 
-buildCalendar();
+function setStatus(msg, isError){
+  const el = document.getElementById("sync-status");
+  if(!el) return;
+  el.innerText = msg;
+  el.style.color = isError ? "var(--red)" : "var(--text-dim)";
+}
+
+async function loadCfg(){
+  setStatus("Loading...", false);
+  try {
+    const snap = await CFGDOC.get();
+    setStatus("", false);
+    return (snap.exists && snap.data().value) ? snap.data().value : clone(DEFAULTS);
+  } catch(e){
+    setStatus("Offline — using defaults", true);
+    return clone(DEFAULTS);
+  }
+}
+
+async function saveCfg(data){
+  await CFGDOC.set({ value: data });
+}
+
+// ── SAVE / RESET / UNDO ──
+let undoCfg = null;
+
+async function saveAndClose(){
+  if(!confirm("This will update the calendar for everyone.\n\nSave changes?")) return;
+  const btn = document.querySelector(".btn-save");
+  btn.innerText = "Saving..."; btn.disabled = true;
+  undoCfg = clone(cfg);
+  try {
+    await saveCfg(cfg);
+    closeDrawer(); buildCalendar(); showUndo();
+  } catch(e){
+    alert("Save failed: " + e.message);
+  } finally {
+    btn.innerText = "Save & Rebuild"; btn.disabled = false;
+  }
+}
+
+async function resetDefaults(){
+  if(!confirm("Reset everything to defaults? This updates the calendar for everyone.")) return;
+  undoCfg = clone(cfg);
+  cfg = clone(DEFAULTS);
+  try { await saveCfg(cfg); } catch(e){ alert("Reset failed: " + e.message); cfg = clone(undoCfg); return; }
+  closeDrawer(); buildCalendar(); showUndo();
+}
+
+function showUndo(){
+  const btn = document.getElementById("undo-btn");
+  if(!btn) return;
+  btn.style.display = "inline-flex";
+  clearTimeout(btn._t);
+  btn._t = setTimeout(() => { btn.style.display = "none"; undoCfg = null; }, 30000);
+}
+
+async function undoSave(){
+  if(!undoCfg) return;
+  if(!confirm("Undo the last save? This reverts the calendar for everyone.")) return;
+  cfg = clone(undoCfg); undoCfg = null;
+  document.getElementById("undo-btn").style.display = "none";
+  try { await saveCfg(cfg); } catch(e){ alert("Undo failed: " + e.message); return; }
+  buildCalendar();
+}
+
+// ── INIT ──
+(async () => { cfg = await loadCfg(); buildCalendar(); })();
 </script>
 </body>
 </html>
