@@ -88,8 +88,9 @@ header{display:flex;justify-content:space-between;align-items:center;margin-bott
 .day-cell.sel.t-holiday {background:#ebf3ff;border-color:#1a56db;border-width:1.5px;}
 .day-cell.sel.t-chabad  {background:#fdf4ff;border-color:#7e22ce;border-width:1.5px;}
 .day-cell.today{box-shadow:0 0 0 2px var(--accent);}
-.day-cell.shabbos{background:#fafaf8;border-style:dashed;cursor:default;opacity:0.5;}
-.day-cell.shabbos:hover{transform:none;box-shadow:none;}
+.day-cell.shabbos{background:#fafaf8;border-style:dashed;cursor:pointer;opacity:0.6;}
+.day-cell.shabbos:hover{transform:translateY(-1px);box-shadow:var(--shadow);opacity:0.8;}
+.day-cell.shabbos-noted{opacity:0.85;border-style:solid;border-color:var(--border2);}
 .cell-date{font-family:'DM Mono',monospace;font-size:0.62rem;color:var(--text-dim);}
 .day-cell.today .cell-date{color:var(--accent);font-weight:700;}
 .cell-topic{font-size:0.68rem;font-weight:600;color:var(--text-mid);line-height:1.3;}
@@ -357,11 +358,21 @@ async function fetchHolidays(){
     [24, "Tevet",   "Chof Dalet Tevet"],
     [5,  "Tevet",   "Hey Tevet"],
     [25, "Adar",    "Chof Hey Adar"],
+    [3,  "Tamuz",   "Gimmel Tamuz"],
     [12, "Tamuz",   "Yud Beis Tamuz"],
     [13, "Tamuz",   "Yud Gimmel Tamuz"],
     [5,  "Av",      "Hey Av"],
     [20, "Av",      "Chof Av"],
   ];
+
+  // Minor holidays that show as a tag but do NOT override the day's topic
+  const MINOR_NO_OVERRIDE = new Set([
+    "Rosh Chodesh","Ta'anit Bechorot","Ta'anit Esther",
+    "Tzom Gedaliah","Tzom Tammuz","Tzom Tevet","Asara B'Tevet",
+    "Shabbat Shekalim","Shabbat Zachor","Shabbat Parah","Shabbat HaChodesh","Shabbat HaGadol",
+    "Shabbat Mevarchim","Isru Chag",
+    // Tu BiShvat and Lag BaOmer ARE topic overrides — intentionally NOT in this list
+  ]);
 
   // Fetch standard holidays from Hebcal, filtering out modern/Israeli ones
   try {
@@ -371,11 +382,20 @@ async function fetchHolidays(){
     const map  = {};
     (data.items || []).forEach(item => {
       if(item.category !== "holiday" && item.category !== "roshchodesh") return;
-      if(item.subcat === "modern") return;                      // skip modern Israeli
+      if(item.subcat === "modern") return;
       const name = item.title_orig || item.title;
-      if(MODERN_FILTER.has(name)) return;                      // skip by name too
+      if(MODERN_FILTER.has(name)) return;
       const date = item.date.slice(0,10);
-      if(!map[date]) map[date] = { label: name, type: "holiday" };
+
+      // Determine if this holiday should become the day's topic
+      // Rosh Chodesh Kislev is special — it's a big Chabad day so it overrides
+      const isRoshChodeshKislev = item.category === "roshchodesh" && name.includes("Kislev");
+      const isMinor = item.category === "roshchodesh"
+        || MINOR_NO_OVERRIDE.has(name)
+        || MINOR_NO_OVERRIDE.has(name.replace(/ I$| II$| III$| IV$/, "").trim());
+      const topicOverride = isRoshChodeshKislev || !isMinor;
+
+      if(!map[date]) map[date] = { label: name, type: "holiday", topicOverride };
     });
     jewishHolidays = map;
     console.log("[Hebcal] Holidays loaded:", Object.keys(jewishHolidays).length);
@@ -402,10 +422,10 @@ async function fetchHolidays(){
           // Only add if in current month and not already a holiday
           if(data.gm === m && data.gy === y){
             if(!jewishHolidays[dateStr]){
-              jewishHolidays[dateStr] = { label, type: "chabad" };
+              jewishHolidays[dateStr] = { label, type: "chabad", topicOverride: true };
             } else {
-              // Append to existing
               jewishHolidays[dateStr].label += ` · ${label}`;
+              jewishHolidays[dateStr].topicOverride = true; // chabad date always wins
             }
           }
         })
@@ -417,32 +437,34 @@ async function fetchHolidays(){
     console.error("[Chabad] Failed:", e);
   }
 
-  // Fetch Hebrew date for every day on the calendar (28 days)
+  // Fetch Hebrew date for every cell shown on the calendar grid
+  // The grid shows 4 weeks × 7 days, starting from the Sunday of week 1.
+  // This may include days from the previous or next month (spillover).
   const dateMap = {};
-  const start   = new Date(viewDate.getFullYear(), viewDate.getMonth(), 1);
   const fetches = [];
-  for(let i = 0; i < 28; i++){
-    const d   = new Date(start);
-    d.setDate(start.getDate() + i);
-    const key = d.toISOString().split("T")[0];
-    fetches.push(
-      fetch(`https://www.hebcal.com/converter?cfg=json&date=${key}&g2h=1`)
-        .then(r => r.json())
-        .then(data => {
-          dateMap[key] = {
-            hd:   data.hd,
-            hm:   data.hm,
-            hy:   data.hy,
-            full: `${data.hd} ${data.hm} ${data.hy}`,
-          };
-        })
-        .catch(() => {})
-    );
+  for(let w=1; w<=4; w++){
+    for(let d=0; d<7; d++){
+      const cd  = dateOfCell(w, d);
+      const key = cd.toISOString().split("T")[0];
+      if(dateMap[key]) continue; // already queued
+      dateMap[key] = null; // placeholder so we don't double-fetch
+      fetches.push(
+        fetch(`https://www.hebcal.com/converter?cfg=json&date=${key}&g2h=1`)
+          .then(r => r.json())
+          .then(data => {
+            dateMap[key] = {
+              hd:   data.hd,
+              hm:   data.hm,
+              hy:   data.hy,
+              full: `${data.hd} ${data.hm} ${data.hy}`,
+            };
+          })
+          .catch(() => {})
+      );
+    }
   }
   await Promise.all(fetches);
   hebrewDates = dateMap;
-  console.log("[Hebcal] Hebrew dates loaded:", Object.keys(hebrewDates).length,
-    "| Today:", hebrewDates[now.toISOString().split("T")[0]]?.full);
 }
 
 // ─────────────────────────────────────────────
@@ -466,13 +488,19 @@ function postingSlot(targetW, targetD){
 
 // What topic and type does this cell get?
 function cellMeta(d, w){
-  if(d === 6) return { topic:"Shabbos", type:"shabbos", isPhoto:false, isShabbos:true };
+  if(d === 6){
+    // Check for a custom Shabbos note
+    const cd      = dateOfCell(w, d);
+    const dateStr = cd.toISOString().split("T")[0];
+    const note    = (cfg.shabbosNotes || {})[dateStr];
+    return { topic: note ? note.topic : "Shabbos", type:"shabbos", isPhoto:false, isShabbos:true, hasNote: !!note, note };
+  }
 
-  // Check if this date has a holiday/Chabad date that should override the topic
-  const cd       = dateOfCell(w, d);
-  const dateStr  = cd.toISOString().split("T")[0];
-  const holiday  = jewishHolidays[dateStr];
-  if(holiday){
+  // Check if this date has a holiday that should override the topic
+  const cd      = dateOfCell(w, d);
+  const dateStr = cd.toISOString().split("T")[0];
+  const holiday = jewishHolidays[dateStr];
+  if(holiday && holiday.topicOverride){
     const isPhoto = photoCapableDays().includes(d);
     const type    = holiday.type === "chabad" ? "chabad" : "holiday";
     return { topic: holiday.label, type, isPhoto, isShabbos:false };
@@ -548,7 +576,17 @@ function inspect(d, w){
     badge.style.display = "none";
     taskSec.style.display = "block";
     pushBtn.style.display = "none";
-    list.innerHTML = '<div class="shabbos-note">Rest. No tasks scheduled.</div>';
+    const note = meta.note;
+    list.innerHTML = `
+      <div class="shabbos-note">
+        ${note ? `<div style="font-family:'Playfair Display',serif;font-size:1rem;color:var(--text);margin-bottom:10px">${note.topic}</div>` : `<div style="font-family:'Playfair Display',serif;font-style:italic;color:var(--text-dim);margin-bottom:10px">Rest. No tasks scheduled.</div>`}
+        <div style="display:flex;gap:7px;margin-top:8px">
+          <input id="shabbos-note-input" class="finput" placeholder="Add a Shabbos note or topic..." value="${note ? note.topic : ""}" style="flex:1;font-size:0.78rem">
+          <button onclick="saveShabbosNote('${selected.dateStr}')" style="padding:8px 12px;background:var(--primary);color:white;border:none;border-radius:var(--radius-sm);font-family:'Sora',sans-serif;font-size:0.74rem;font-weight:700;cursor:pointer">Save</button>
+          ${note ? `<button onclick="clearShabbosNote('${selected.dateStr}')" style="padding:8px 12px;background:var(--surface2);color:var(--text-dim);border:1px solid var(--border2);border-radius:var(--radius-sm);font-family:'Sora',sans-serif;font-size:0.74rem;cursor:pointer">Clear</button>` : ""}
+        </div>
+      </div>
+    `;
     return;
   }
 
@@ -660,11 +698,12 @@ function buildCalendar(){
         "day-cell", `t-${meta.type}`,
         isToday ? "today" : "",
         meta.isShabbos ? "shabbos" : "",
+        meta.isShabbos && meta.hasNote ? "shabbos-noted" : "",
         holidayObj ? "has-holiday" : "",
         holidayType === "chabad" ? "has-chabad" : "",
       ].filter(Boolean).join(" ");
       cell.dataset.w = w; cell.dataset.d = d;
-      cell.onclick = () => { if(!meta.isShabbos) inspect(d, w); };
+      cell.onclick = () => inspect(d, w); // all cells clickable, including Shabbos
       const hdate        = hebrewDates[dateStr];
       const hdateDisplay = hdate ? `${hdate.hd} ${hdate.hm}` : "";
       cell.innerHTML = `
@@ -680,11 +719,11 @@ function buildCalendar(){
       if(isToday) selected = { d, w, dateStr };
     }
   }
-  // If no today found (different month), select first active cell
+  // If no today found (different month), select first cell of the month
   if(!isCurrentMonth){
     outer: for(let w=1;w<=4;w++) for(let d=0;d<7;d++){
       const cd2 = dateOfCell(w,d);
-      if(cd2.getMonth()===viewDate.getMonth() && d!==6){
+      if(cd2.getMonth()===viewDate.getMonth()){
         selected={d,w,dateStr:cd2.toISOString().split("T")[0]};
         break outer;
       }
@@ -696,6 +735,26 @@ function buildCalendar(){
 // ─────────────────────────────────────────────
 // DRAWER
 // ─────────────────────────────────────────────
+async function saveShabbosNote(dateStr){
+  const val = document.getElementById("shabbos-note-input")?.value.trim();
+  if(!val) return;
+  if(!cfg.shabbosNotes) cfg.shabbosNotes = {};
+  cfg.shabbosNotes[dateStr] = { topic: val };
+  try { await saveCfg(cfg); } catch(e){ alert("Save failed: " + e.message); return; }
+  buildCalendar();
+  // Re-select the Shabbos cell
+  const cell = document.querySelector(`[data-w="${selected.w}"][data-d="6"]`);
+  if(cell) inspect(6, selected.w);
+}
+
+async function clearShabbosNote(dateStr){
+  if(!cfg.shabbosNotes) return;
+  delete cfg.shabbosNotes[dateStr];
+  try { await saveCfg(cfg); } catch(e){ alert("Save failed: " + e.message); return; }
+  buildCalendar();
+  inspect(6, selected.w);
+}
+
 function openDrawer(){ renderTab(); document.getElementById("overlay").classList.add("open"); document.getElementById("drawer").classList.add("open"); }
 function closeDrawer(){ document.getElementById("overlay").classList.remove("open"); document.getElementById("drawer").classList.remove("open"); }
 
