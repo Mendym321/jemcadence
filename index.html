@@ -45,6 +45,8 @@ header{display:flex;justify-content:space-between;align-items:center;margin-bott
 .badge-rotating{background:var(--purple-light);color:var(--purple);border:1px solid rgba(109,40,217,0.2);}
 .badge-photo   {background:var(--red-light);color:var(--red);border:1px solid rgba(192,57,43,0.2);}
 .badge-filler  {background:var(--surface2);color:var(--text-dim);border:1px solid var(--border2);}
+.badge-holiday {background:#ebf3ff;color:#1a56db;border:1px solid rgba(26,86,219,0.2);}
+.badge-chabad  {background:#fdf4ff;color:#7e22ce;border:1px solid rgba(126,34,206,0.2);}
 .insp-section-label{font-family:'DM Mono',monospace;font-size:0.55rem;letter-spacing:0.18em;color:var(--text-dim);text-transform:uppercase;margin-bottom:7px;}
 .task-list{display:flex;flex-direction:column;gap:5px;}
 .task-row{display:flex;align-items:center;gap:10px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 13px;font-size:0.8rem;font-weight:500;color:var(--text-mid);transition:all .15s;animation:fadeUp .18s ease both;}
@@ -71,14 +73,20 @@ header{display:flex;justify-content:space-between;align-items:center;margin-bott
 .day-cell.t-rotating{border-left:3px solid rgba(109,40,217,0.3);}
 .day-cell.t-photo   {border-left:3px solid rgba(192,57,43,0.35);}
 .day-cell.t-filler  {border-left:3px solid rgba(26,86,219,0.2);}
+.day-cell.t-holiday {border-left:3px solid rgba(26,86,219,0.5);}
+.day-cell.t-chabad  {border-left:3px solid rgba(126,34,206,0.5);}
 .day-cell.t-fixed:hover   {border-color:var(--accent);background:var(--accent-light);}
 .day-cell.t-rotating:hover{border-color:var(--purple);background:var(--purple-light);}
 .day-cell.t-photo:hover   {border-color:var(--red);background:var(--red-light);}
 .day-cell.t-filler:hover  {border-color:var(--primary);background:var(--primary-light);}
+.day-cell.t-holiday:hover {border-color:#1a56db;background:#ebf3ff;}
+.day-cell.t-chabad:hover  {border-color:#7e22ce;background:#fdf4ff;}
 .day-cell.sel.t-fixed   {background:var(--accent-light);border-color:var(--accent);border-width:1.5px;}
 .day-cell.sel.t-rotating{background:var(--purple-light);border-color:var(--purple);border-width:1.5px;}
 .day-cell.sel.t-photo   {background:var(--red-light);border-color:var(--red);border-width:1.5px;}
 .day-cell.sel.t-filler  {background:var(--primary-light);border-color:var(--primary);border-width:1.5px;}
+.day-cell.sel.t-holiday {background:#ebf3ff;border-color:#1a56db;border-width:1.5px;}
+.day-cell.sel.t-chabad  {background:#fdf4ff;border-color:#7e22ce;border-width:1.5px;}
 .day-cell.today{box-shadow:0 0 0 2px var(--accent);}
 .day-cell.shabbos{background:#fafaf8;border-style:dashed;cursor:default;opacity:0.5;}
 .day-cell.shabbos:hover{transform:none;box-shadow:none;}
@@ -87,7 +95,9 @@ header{display:flex;justify-content:space-between;align-items:center;margin-bott
 .cell-topic{font-size:0.68rem;font-weight:600;color:var(--text-mid);line-height:1.3;}
 .today-tag{font-family:'DM Mono',monospace;font-size:0.48rem;padding:2px 6px;border-radius:4px;margin-top:auto;background:var(--accent-light);color:var(--accent);border:1px solid rgba(200,120,26,0.2);display:inline-block;}
 .holiday-tag{font-family:'DM Mono',monospace;font-size:0.46rem;padding:2px 5px;border-radius:4px;background:#f0f7ff;color:#1a56db;border:1px solid rgba(26,86,219,0.2);display:inline-block;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;}
+.holiday-tag-chabad{background:#fdf4ff;color:#7e22ce;border-color:rgba(126,34,206,0.2);}
 .day-cell.has-holiday{border-top:2px solid rgba(26,86,219,0.4);}
+.day-cell.has-chabad{border-top:2px solid rgba(126,34,206,0.4);}
 .cell-hdate{font-family:'DM Mono',monospace;font-size:0.56rem;color:var(--text-dim);text-align:right;}
 .cell-top-row{display:flex;justify-content:space-between;align-items:flex-start;}
 
@@ -176,7 +186,12 @@ select.finput{cursor:pointer;}
     <div style="display:flex;align-items:center;gap:14px">
       <span id="sync-status" style="font-family:'DM Mono',monospace;font-size:0.6rem;letter-spacing:0.1em"></span>
       <button id="undo-btn" onclick="undoSave()" style="display:none;align-items:center;gap:6px;background:var(--accent-light);border:1px solid var(--accent);border-radius:var(--radius-sm);padding:7px 13px;font-family:'Sora',sans-serif;font-size:0.72rem;font-weight:600;color:var(--accent);cursor:pointer">Undo last save</button>
-      <span id="phase-info" style="font-family:'DM Mono',monospace;font-size:0.62rem;color:var(--text-dim);letter-spacing:0.15em;text-transform:uppercase"></span>
+      <div style="display:flex;align-items:center;gap:6px">
+        <button id="nav-prev" onclick="changeMonth(-1)" style="width:30px;height:30px;border:1px solid var(--border2);border-radius:var(--radius-sm);background:var(--surface);cursor:pointer;font-size:1rem;color:var(--text-mid);transition:all .15s;display:flex;align-items:center;justify-content:center;" onmouseover="this.style.borderColor='var(--primary)';this.style.color='var(--primary)'" onmouseout="this.style.borderColor='var(--border2)';this.style.color='var(--text-mid)'">&#8249;</button>
+        <span id="phase-info" style="font-family:'DM Mono',monospace;font-size:0.62rem;color:var(--text-dim);letter-spacing:0.15em;text-transform:uppercase;min-width:140px;text-align:center"></span>
+        <button id="nav-next" onclick="changeMonth(1)" style="width:30px;height:30px;border:1px solid var(--border2);border-radius:var(--radius-sm);background:var(--surface);cursor:pointer;font-size:1rem;color:var(--text-mid);transition:all .15s;display:flex;align-items:center;justify-content:center;" onmouseover="this.style.borderColor='var(--primary)';this.style.color='var(--primary)'" onmouseout="this.style.borderColor='var(--border2)';this.style.color='var(--text-mid)'">&#8250;</button>
+        <button id="nav-today" onclick="goToToday()" style="padding:6px 11px;border:1px solid var(--border2);border-radius:var(--radius-sm);background:var(--surface);cursor:pointer;font-family:'Sora',sans-serif;font-size:0.7rem;font-weight:600;color:var(--text-mid);transition:all .15s;" onmouseover="this.style.borderColor='var(--primary)';this.style.color='var(--primary)'" onmouseout="this.style.borderColor='var(--border2)';this.style.color='var(--text-mid)'">Today</button>
+      </div>
       <button class="btn-edit" onclick="openDrawer()">Edit Schedule</button>
     </div>
   </header>
@@ -201,6 +216,8 @@ select.finput{cursor:pointer;}
         <div class="leg-item"><div class="leg-pip" style="background:var(--red)"></div>Photo Day</div>
         <div class="leg-item"><div class="leg-pip" style="background:var(--primary)"></div>Filler</div>
         <div class="leg-item"><div class="leg-pip" style="background:var(--border2);border:1px dashed var(--border2)"></div>Shabbos</div>
+        <div class="leg-item"><div class="leg-pip" style="background:#1a56db;border-radius:50%"></div>Holiday</div>
+        <div class="leg-item"><div class="leg-pip" style="background:#7e22ce;border-radius:50%"></div>Chabad</div>
       </div>
       <div class="cal-head" id="cal-head"></div>
       <div class="cal-grid" id="cal-grid"></div>
@@ -300,6 +317,7 @@ function photoCapableDays(){
 let cfg = clone(DEFAULTS);
 let selected = { d:1, w:1, dateStr:"" };
 let activeTab = "fixed";
+let viewDate  = new Date(); // the month currently being viewed
 
 const DAY_NAMES = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
 const DAY_SHORT = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
@@ -316,19 +334,48 @@ let hebrewDates    = {}; // "YYYY-MM-DD" -> { hd, hm, hy, full }
 
 async function fetchHolidays(){
   const now = new Date();
-  const y = now.getFullYear(), m = now.getMonth() + 1;
+  const y = viewDate.getFullYear(), m = viewDate.getMonth() + 1;
 
-  // Fetch holidays
+  // Modern/Israeli holidays to exclude by title
+  const MODERN_FILTER = new Set([
+    "Yom HaShoah","Yom HaZikaron","Yom HaAtzma'ut","Yom Yerushalayim",
+    "Herzl Day","Ze'ev Jabotinsky Day","Yitzhak Rabin Memorial Day",
+    "Sigd","Ben-Gurion Day","Family Day",
+  ]);
+
+  // Chabad Chassidic dates: [Hebrew day, Hebrew month, display label]
+  const CHABAD_DATES = [
+    [10, "Shvat",   "Yud Shevat"],
+    [22, "Shvat",   "Chof Beis Shevat"],
+    [2,  "Nisan",   "Beis Nissan"],
+    [11, "Nisan",   "Yud Alef Nissan"],
+    [2,  "Iyar",    "Beis Iyar"],
+    [20, "Cheshvan","Chof Cheshvan"],
+    [9,  "Kislev",  "Tes Kislev"],
+    [14, "Kislev",  "Yud Daled Kislev"],
+    [19, "Kislev",  "Yud Tes Kislev"],
+    [24, "Tevet",   "Chof Dalet Tevet"],
+    [5,  "Tevet",   "Hey Tevet"],
+    [25, "Adar",    "Chof Hey Adar"],
+    [12, "Tamuz",   "Yud Beis Tamuz"],
+    [13, "Tamuz",   "Yud Gimmel Tamuz"],
+    [5,  "Av",      "Hey Av"],
+    [20, "Av",      "Chof Av"],
+  ];
+
+  // Fetch standard holidays from Hebcal, filtering out modern/Israeli ones
   try {
     const url = `https://www.hebcal.com/hebcal?v=1&cfg=json&year=${y}&month=${m}&maj=on&min=on&mod=on&nx=on&mf=on&ss=on&s=on&i=off&geo=none`;
     const res  = await fetch(url);
     const data = await res.json();
     const map  = {};
     (data.items || []).forEach(item => {
-      if(item.category === "holiday" || item.category === "roshchodesh"){
-        const date = item.date.slice(0,10);
-        if(!map[date]) map[date] = item.title;
-      }
+      if(item.category !== "holiday" && item.category !== "roshchodesh") return;
+      if(item.subcat === "modern") return;                      // skip modern Israeli
+      const name = item.title_orig || item.title;
+      if(MODERN_FILTER.has(name)) return;                      // skip by name too
+      const date = item.date.slice(0,10);
+      if(!map[date]) map[date] = { label: name, type: "holiday" };
     });
     jewishHolidays = map;
     console.log("[Hebcal] Holidays loaded:", Object.keys(jewishHolidays).length);
@@ -337,10 +384,42 @@ async function fetchHolidays(){
     jewishHolidays = {};
   }
 
-  // Fetch Hebrew date for every day shown on the calendar (28 days)
-  // Reuses the same converter endpoint that works for Monday export
+  // Resolve Chabad dates for this Hebrew year via converter
+  // First get the Hebrew year for this Gregorian month
+  try {
+    const sample = `${y}-${String(m).padStart(2,"0")}-15`;
+    const sr = await fetch(`https://www.hebcal.com/converter?cfg=json&date=${sample}&g2h=1`);
+    const sd = await sr.json();
+    const hy = sd.hy; // Hebrew year for this month
+
+    // Fetch each Chabad date
+    const chabadFetches = CHABAD_DATES.map(([hd, hmonth, label]) =>
+      fetch(`https://www.hebcal.com/converter?cfg=json&hy=${hy}&hm=${hmonth}&hd=${hd}&h2g=1`)
+        .then(r => r.json())
+        .then(data => {
+          if(!data.gy) return; // invalid date
+          const dateStr = `${data.gy}-${String(data.gm).padStart(2,"0")}-${String(data.gd).padStart(2,"0")}`;
+          // Only add if in current month and not already a holiday
+          if(data.gm === m && data.gy === y){
+            if(!jewishHolidays[dateStr]){
+              jewishHolidays[dateStr] = { label, type: "chabad" };
+            } else {
+              // Append to existing
+              jewishHolidays[dateStr].label += ` · ${label}`;
+            }
+          }
+        })
+        .catch(() => {})
+    );
+    await Promise.all(chabadFetches);
+    console.log("[Chabad] Dates resolved. Total holidays:", Object.keys(jewishHolidays).length);
+  } catch(e){
+    console.error("[Chabad] Failed:", e);
+  }
+
+  // Fetch Hebrew date for every day on the calendar (28 days)
   const dateMap = {};
-  const start   = new Date(now.getFullYear(), now.getMonth(), 1);
+  const start   = new Date(viewDate.getFullYear(), viewDate.getMonth(), 1);
   const fetches = [];
   for(let i = 0; i < 28; i++){
     const d   = new Date(start);
@@ -362,8 +441,8 @@ async function fetchHolidays(){
   }
   await Promise.all(fetches);
   hebrewDates = dateMap;
-  const today = now.toISOString().split("T")[0];
-  console.log("[Hebcal] Hebrew dates loaded:", Object.keys(hebrewDates).length, "| Today:", hebrewDates[today]?.full);
+  console.log("[Hebcal] Hebrew dates loaded:", Object.keys(hebrewDates).length,
+    "| Today:", hebrewDates[now.toISOString().split("T")[0]]?.full);
 }
 
 // ─────────────────────────────────────────────
@@ -389,6 +468,16 @@ function postingSlot(targetW, targetD){
 function cellMeta(d, w){
   if(d === 6) return { topic:"Shabbos", type:"shabbos", isPhoto:false, isShabbos:true };
 
+  // Check if this date has a holiday/Chabad date that should override the topic
+  const cd       = dateOfCell(w, d);
+  const dateStr  = cd.toISOString().split("T")[0];
+  const holiday  = jewishHolidays[dateStr];
+  if(holiday){
+    const isPhoto = photoCapableDays().includes(d);
+    const type    = holiday.type === "chabad" ? "chabad" : "holiday";
+    return { topic: holiday.label, type, isPhoto, isShabbos:false };
+  }
+
   const fixed = cfg.fixedRules.find(r => r.dayOfWeek === d);
   if(fixed) return { topic:fixed.topic, type:"fixed", isPhoto:false, isShabbos:false };
 
@@ -399,7 +488,6 @@ function cellMeta(d, w){
     const n = item.everyNDays || 7;
     const offset = cfg.rotatingItems.indexOf(item);
     if(slot % n === offset % n){
-      // Photo day = rotating item lands on a photo-capable day
       const isPhoto = photoDays.includes(d);
       return { topic:item.name, type:isPhoto?"photo":"rotating", isPhoto, isShabbos:false };
     }
@@ -469,6 +557,8 @@ function inspect(d, w){
     rotating: { cls:"badge-rotating", text:"Rotating"     },
     photo:    { cls:"badge-photo",    text:"Photo Day"    },
     filler:   { cls:"badge-filler",   text:"Filler Topic" },
+    holiday:  { cls:"badge-holiday",  text:"Jewish Holiday"},
+    chabad:   { cls:"badge-chabad",   text:"Chabad Date"  },
   };
   const bm = badgeMap[meta.type];
   badge.className    = `insp-badge ${bm.cls}`;
@@ -492,8 +582,8 @@ function inspect(d, w){
 }
 
 function dateOfCell(w, d){
-  const n = new Date(), s = new Date(n.getFullYear(), n.getMonth(), 1);
-  return new Date(n.getFullYear(), n.getMonth(), 1 + (w-1)*7 + (d - s.getDay()));
+  const s = new Date(viewDate.getFullYear(), viewDate.getMonth(), 1);
+  return new Date(viewDate.getFullYear(), viewDate.getMonth(), 1 + (w-1)*7 + (d - s.getDay()));
 }
 
 // ─────────────────────────────────────────────
@@ -538,8 +628,17 @@ async function pushToMonday(){
 // CALENDAR BUILD
 // ─────────────────────────────────────────────
 function buildCalendar(){
-  const now = new Date();
-  document.getElementById("phase-info").innerText = now.toLocaleString("default",{month:"long",year:"numeric"}).toUpperCase();
+  const now  = new Date();
+  const isCurrentMonth = viewDate.getFullYear()===now.getFullYear() && viewDate.getMonth()===now.getMonth();
+  document.getElementById("phase-info").innerText = viewDate.toLocaleString("default",{month:"long",year:"numeric"}).toUpperCase();
+
+  // Update nav buttons
+  const prevBtn = document.getElementById("nav-prev");
+  const nextBtn = document.getElementById("nav-next");
+  const todayBtn = document.getElementById("nav-today");
+  if(prevBtn) prevBtn.innerText = "‹";
+  if(nextBtn) nextBtn.innerText = "›";
+  if(todayBtn) todayBtn.style.opacity = isCurrentMonth ? "0.3" : "1";
 
   const head = document.getElementById("cal-head");
   const grid = document.getElementById("cal-grid");
@@ -552,18 +651,21 @@ function buildCalendar(){
       const cd      = dateOfCell(w, d);
       const isToday = cd.toDateString() === now.toDateString();
       const dateStr = cd.toISOString().split("T")[0];
-      const holiday = jewishHolidays[dateStr] || null;
+      const holidayObj = jewishHolidays[dateStr] || null;
+      const holidayLabel = holidayObj ? holidayObj.label : null;
+      const holidayType  = holidayObj ? holidayObj.type  : null;
 
       const cell = document.createElement("div");
       cell.className = [
         "day-cell", `t-${meta.type}`,
         isToday ? "today" : "",
         meta.isShabbos ? "shabbos" : "",
-        holiday ? "has-holiday" : "",
+        holidayObj ? "has-holiday" : "",
+        holidayType === "chabad" ? "has-chabad" : "",
       ].filter(Boolean).join(" ");
       cell.dataset.w = w; cell.dataset.d = d;
       cell.onclick = () => { if(!meta.isShabbos) inspect(d, w); };
-      const hdate   = hebrewDates[dateStr];
+      const hdate        = hebrewDates[dateStr];
       const hdateDisplay = hdate ? `${hdate.hd} ${hdate.hm}` : "";
       cell.innerHTML = `
         <div class="cell-top-row">
@@ -571,11 +673,21 @@ function buildCalendar(){
           ${hdateDisplay ? `<span class="cell-hdate">${hdateDisplay}</span>` : ""}
         </div>
         <span class="cell-topic">${meta.topic}</span>
-        ${holiday ? `<span class="holiday-tag">${holiday}</span>` : ""}
+        ${holidayLabel ? `<span class="holiday-tag ${holidayType === "chabad" ? "holiday-tag-chabad" : ""}">${holidayLabel}</span>` : ""}
         ${isToday ? '<span class="today-tag">TODAY</span>' : ""}
       `;
       grid.appendChild(cell);
       if(isToday) selected = { d, w, dateStr };
+    }
+  }
+  // If no today found (different month), select first active cell
+  if(!isCurrentMonth){
+    outer: for(let w=1;w<=4;w++) for(let d=0;d<7;d++){
+      const cd2 = dateOfCell(w,d);
+      if(cd2.getMonth()===viewDate.getMonth() && d!==6){
+        selected={d,w,dateStr:cd2.toISOString().split("T")[0]};
+        break outer;
+      }
     }
   }
   inspect(selected.d, selected.w);
@@ -586,6 +698,20 @@ function buildCalendar(){
 // ─────────────────────────────────────────────
 function openDrawer(){ renderTab(); document.getElementById("overlay").classList.add("open"); document.getElementById("drawer").classList.add("open"); }
 function closeDrawer(){ document.getElementById("overlay").classList.remove("open"); document.getElementById("drawer").classList.remove("open"); }
+
+async function changeMonth(delta){
+  viewDate = new Date(viewDate.getFullYear(), viewDate.getMonth() + delta, 1);
+  jewishHolidays = {}; hebrewDates = {};
+  await fetchHolidays();
+  buildCalendar();
+}
+
+async function goToToday(){
+  viewDate = new Date();
+  jewishHolidays = {}; hebrewDates = {};
+  await fetchHolidays();
+  buildCalendar();
+}
 function tab(name){
   activeTab = name;
   document.querySelectorAll(".dtab").forEach((t,i) => t.classList.toggle("on", ["fixed","rotating","filler","platforms"][i]===name));
