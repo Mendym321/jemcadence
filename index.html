@@ -438,11 +438,9 @@ async function fetchHolidays(){
   }
 
   // Fetch Hebrew date for every cell shown on the calendar grid
-  // The grid shows 4 weeks × 7 days, starting from the Sunday of week 1.
-  // This may include days from the previous or next month (spillover).
   const dateMap = {};
   const fetches = [];
-  for(let w=1; w<=4; w++){
+  for(let w=1; w<=numWeeks(); w++){
     for(let d=0; d<7; d++){
       const cd  = dateOfCell(w, d);
       const key = cd.toISOString().split("T")[0];
@@ -471,8 +469,13 @@ async function fetchHolidays(){
 // SCHEDULE LOGIC
 // ─────────────────────────────────────────────
 
-// Count how many active posting days have passed before this cell.
-// Active = not Shabbos, not a fixed-rule day.
+// How many rows does this month's calendar need?
+function numWeeks(){
+  const y    = viewDate.getFullYear(), m = viewDate.getMonth();
+  const firstDay = new Date(y, m, 1).getDay();   // 0=Sun
+  const daysInMonth = new Date(y, m+1, 0).getDate();
+  return Math.ceil((firstDay + daysInMonth) / 7);
+}
 function postingSlot(targetW, targetD){
   let slot = 0;
   for(let w=1; w<=targetW; w++){
@@ -525,27 +528,45 @@ function cellMeta(d, w){
   return { topic: pool.length ? pool[slot % pool.length] : "—", type:"filler", isPhoto:false, isShabbos:false };
 }
 
-// Which tasks run today?
-function tasksForDay(meta, d){
+// Which tasks run today, with per-day overrides applied?
+function tasksForDay(meta, d, dateStr){
   if(meta.isShabbos) return [];
-  return cfg.platforms
+  const overrides = (cfg.dayOverrides || {})[dateStr] || {};
+  const removed   = new Set(overrides.removedTasks || []);
+
+  // Base tasks from platforms
+  let tasks = cfg.platforms
     .filter(p => p.activeDays.length === 0 || p.activeDays.includes(d))
     .map((p, i) => {
       const isPhotoSwap = meta.isPhoto && !!p.photoContent;
-      // colorIdx: use stored value, fall back to position in array
-      const colorIdx = (p.colorIdx !== undefined && p.colorIdx !== null)
-        ? p.colorIdx
-        : cfg.platforms.indexOf(p) % 7;
+      const colorIdx    = (p.colorIdx !== undefined && p.colorIdx !== null) ? p.colorIdx : cfg.platforms.indexOf(p) % 7;
       return {
-        label:       `${p.name} — ${isPhotoSwap ? p.photoContent : p.content}`,
+        id:         p.name, // used to identify for removal
+        label:      `${p.name} — ${isPhotoSwap ? p.photoContent : p.content}`,
         isPhotoSwap,
-        mondayId:    p.mondayId ?? 0,
+        mondayId:   p.mondayId ?? 0,
         colorIdx,
-        mondayName:  p.plainMonday
-          ? (p.name === "JEM.tv" ? "JEM.tv Update" : "Content Email")
-          : null,
+        mondayName: p.plainMonday ? (p.name === "JEM.tv" ? "JEM.tv Update" : "Content Email") : null,
+        isAdded:    false,
       };
+    })
+    .filter(t => !removed.has(t.id));
+
+  // Add one-off tasks for this day
+  const added = overrides.addedTasks || [];
+  added.forEach((a, i) => {
+    tasks.push({
+      id:         `__added_${i}`,
+      label:      a.label,
+      isPhotoSwap:false,
+      mondayId:   0,
+      colorIdx:   6,
+      mondayName: null,
+      isAdded:    true,
     });
+  });
+
+  return tasks;
 }
 
 // ─────────────────────────────────────────────
@@ -598,25 +619,50 @@ function inspect(d, w){
     holiday:  { cls:"badge-holiday",  text:"Jewish Holiday"},
     chabad:   { cls:"badge-chabad",   text:"Chabad Date"  },
   };
-  const bm = badgeMap[meta.type];
+  const bm = badgeMap[meta.type] || badgeMap.filler;
   badge.className    = `insp-badge ${bm.cls}`;
   badge.innerText    = bm.text;
   badge.style.display = "inline-block";
   taskSec.style.display = "block";
   pushBtn.style.display = "block";
 
-  tasksForDay(meta, d).forEach((t, i) => {
+  // Topic — click to edit
+  const overrides   = (cfg.dayOverrides || {})[selected.dateStr] || {};
+  const topicVal    = overrides.topic || meta.topic;
+  document.getElementById("insp-topic").innerHTML = `
+    <span id="topic-display" style="cursor:pointer;border-bottom:1px dashed var(--border2);padding-bottom:2px" title="Click to edit" onclick="editTopic()">${topicVal}</span>
+  `;
+
+  // Tasks
+  tasksForDay(meta, d, selected.dateStr).forEach((t, i) => {
     const el = document.createElement("div");
     el.className = "task-row";
     el.style.animationDelay = `${i * 0.04}s`;
     const [platName, contentLabel] = t.label.split(" — ");
     el.innerHTML = `
       <div class="task-dot dot-${t.colorIdx}"></div>
-      <span style="flex:1">${platName}</span>
-      <span class="task-pill pill-${t.colorIdx}">${contentLabel}</span>
+      <span style="flex:1">${platName}${contentLabel ? ` <span style="color:var(--text-dim);font-weight:400">— ${contentLabel}</span>` : ""}</span>
+      <button onclick="removeTask('${selected.dateStr}','${t.id}')" title="Remove for this day only" style="background:none;border:none;cursor:pointer;color:var(--text-dim);font-size:0.9rem;padding:0 2px;line-height:1;transition:color .15s" onmouseover="this.style.color='var(--red)'" onmouseout="this.style.color='var(--text-dim)'">×</button>
     `;
     list.appendChild(el);
   });
+
+  // Add task row
+  const addRow = document.createElement("div");
+  addRow.style.cssText = "display:flex;gap:7px;margin-top:8px";
+  addRow.innerHTML = `
+    <input id="add-task-input" class="finput" placeholder="Add a one-off task for this day..." style="flex:1;font-size:0.78rem" onkeydown="if(event.key==='Enter')addTask('${selected.dateStr}')">
+    <button onclick="addTask('${selected.dateStr}')" style="padding:8px 12px;background:var(--primary-light);border:1px solid rgba(26,86,219,0.3);border-radius:var(--radius-sm);font-family:'Sora',sans-serif;font-size:0.74rem;font-weight:700;color:var(--primary);cursor:pointer">+ Add</button>
+  `;
+  list.appendChild(addRow);
+
+  // Show override indicator if any overrides exist
+  if(overrides.topic || (overrides.removedTasks||[]).length || (overrides.addedTasks||[]).length){
+    const badge2 = document.createElement("div");
+    badge2.style.cssText = "margin-top:10px;font-family:'DM Mono',monospace;font-size:0.58rem;color:var(--text-dim);display:flex;align-items:center;gap:8px";
+    badge2.innerHTML = `<span style="color:var(--accent)">✦</span> Day has custom overrides — <button onclick="clearDayOverrides('${selected.dateStr}')" style="background:none;border:none;cursor:pointer;color:var(--red);font-family:'DM Mono',monospace;font-size:0.58rem;text-decoration:underline;padding:0">clear all</button>`;
+    list.appendChild(badge2);
+  }
 }
 
 function dateOfCell(w, d){
@@ -638,7 +684,10 @@ async function getHebrewDate(dateStr){
 async function pushToMonday(){
   const btn   = document.getElementById("btn-push");
   const meta  = cellMeta(selected.d, selected.w);
-  const tasks = tasksForDay(meta, selected.d);
+  const tasks = tasksForDay(meta, selected.d, selected.dateStr);
+  // Apply topic override if set
+  const overrides = (cfg.dayOverrides || {})[selected.dateStr] || {};
+  const topic = overrides.topic || meta.topic;
   btn.disabled = true; btn.innerText = "Sending...";
 
   const heb = await getHebrewDate(selected.dateStr);
@@ -646,7 +695,7 @@ async function pushToMonday(){
   for(const task of tasks){
     const name = task.mondayName
       ? task.mondayName
-      : heb ? `${meta.topic} - ${heb}` : meta.topic;
+      : heb ? `${topic} - ${heb}` : topic;
 
     const cols = JSON.stringify({ [COL_DATE]:{ date:selected.dateStr }, [COL_TYPE]:{ index:task.mondayId } });
     const q    = `mutation { create_item(board_id:${MONDAY_BOARD}, item_name:${JSON.stringify(name)}, column_values:${JSON.stringify(cols)}) { id } }`;
@@ -683,7 +732,8 @@ function buildCalendar(){
   head.innerHTML = ""; grid.innerHTML = "";
   DAY_SHORT.forEach(d => head.innerHTML += `<div class="col-label">${d}</div>`);
 
-  for(let w=1; w<=4; w++){
+  const weeks = numWeeks();
+  for(let w=1; w<=weeks; w++){
     for(let d=0; d<7; d++){
       const meta    = cellMeta(d, w);
       const cd      = dateOfCell(w, d);
@@ -706,14 +756,21 @@ function buildCalendar(){
       cell.onclick = () => inspect(d, w); // all cells clickable, including Shabbos
       const hdate        = hebrewDates[dateStr];
       const hdateDisplay = hdate ? `${hdate.hd} ${hdate.hm}` : "";
+      const hasOverride  = !!(cfg.dayOverrides && cfg.dayOverrides[dateStr] && (
+        cfg.dayOverrides[dateStr].topic ||
+        (cfg.dayOverrides[dateStr].removedTasks||[]).length ||
+        (cfg.dayOverrides[dateStr].addedTasks||[]).length
+      ));
+      const displayTopic = (cfg.dayOverrides?.[dateStr]?.topic) || meta.topic;
       cell.innerHTML = `
         <div class="cell-top-row">
           <span class="cell-date">${cd.getDate()}</span>
           ${hdateDisplay ? `<span class="cell-hdate">${hdateDisplay}</span>` : ""}
         </div>
-        <span class="cell-topic">${meta.topic}</span>
+        <span class="cell-topic">${displayTopic}</span>
         ${holidayLabel ? `<span class="holiday-tag ${holidayType === "chabad" ? "holiday-tag-chabad" : ""}">${holidayLabel}</span>` : ""}
         ${isToday ? '<span class="today-tag">TODAY</span>' : ""}
+        ${hasOverride ? '<span style="position:absolute;top:6px;right:6px;width:6px;height:6px;border-radius:50%;background:var(--accent)"></span>' : ""}
       `;
       grid.appendChild(cell);
       if(isToday) selected = { d, w, dateStr };
@@ -721,7 +778,7 @@ function buildCalendar(){
   }
   // If no today found (different month), select first cell of the month
   if(!isCurrentMonth){
-    outer: for(let w=1;w<=4;w++) for(let d=0;d<7;d++){
+    outer: for(let w=1;w<=weeks;w++) for(let d=0;d<7;d++){
       const cd2 = dateOfCell(w,d);
       if(cd2.getMonth()===viewDate.getMonth()){
         selected={d,w,dateStr:cd2.toISOString().split("T")[0]};
@@ -735,6 +792,69 @@ function buildCalendar(){
 // ─────────────────────────────────────────────
 // DRAWER
 // ─────────────────────────────────────────────
+// ── PER-DAY OVERRIDES ──
+function getOverride(dateStr){
+  if(!cfg.dayOverrides) cfg.dayOverrides = {};
+  if(!cfg.dayOverrides[dateStr]) cfg.dayOverrides[dateStr] = {};
+  return cfg.dayOverrides[dateStr];
+}
+
+function editTopic(){
+  const display = document.getElementById("topic-display");
+  if(!display) return;
+  const cur = display.innerText;
+  display.outerHTML = `
+    <span style="display:flex;gap:6px;align-items:center">
+      <input id="topic-edit-input" class="finput" value="${cur}" style="font-size:1.2rem;font-family:'Playfair Display',serif;padding:4px 8px" onkeydown="if(event.key==='Enter')saveTopic('${selected.dateStr}')">
+      <button onclick="saveTopic('${selected.dateStr}')" style="padding:6px 11px;background:var(--primary);color:white;border:none;border-radius:var(--radius-sm);font-family:'Sora',sans-serif;font-size:0.74rem;font-weight:700;cursor:pointer;white-space:nowrap">Save</button>
+    </span>
+  `;
+  document.getElementById("topic-edit-input")?.focus();
+}
+
+async function saveTopic(dateStr){
+  const val = document.getElementById("topic-edit-input")?.value.trim();
+  if(!val) return;
+  const ov = getOverride(dateStr);
+  ov.topic = val;
+  await saveCfg(cfg);
+  inspect(selected.d, selected.w);
+  buildCalendar();
+}
+
+async function removeTask(dateStr, taskId){
+  const ov = getOverride(dateStr);
+  if(taskId.startsWith("__added_")){
+    // Remove from addedTasks by index
+    const idx = parseInt(taskId.replace("__added_",""));
+    (ov.addedTasks || []).splice(idx, 1);
+  } else {
+    if(!ov.removedTasks) ov.removedTasks = [];
+    if(!ov.removedTasks.includes(taskId)) ov.removedTasks.push(taskId);
+  }
+  await saveCfg(cfg);
+  inspect(selected.d, selected.w);
+}
+
+async function addTask(dateStr){
+  const inp = document.getElementById("add-task-input");
+  const val = inp?.value.trim();
+  if(!val) return;
+  const ov = getOverride(dateStr);
+  if(!ov.addedTasks) ov.addedTasks = [];
+  ov.addedTasks.push({ label: val });
+  await saveCfg(cfg);
+  inspect(selected.d, selected.w);
+}
+
+async function clearDayOverrides(dateStr){
+  if(!cfg.dayOverrides) return;
+  delete cfg.dayOverrides[dateStr];
+  await saveCfg(cfg);
+  inspect(selected.d, selected.w);
+  buildCalendar();
+}
+
 async function saveShabbosNote(dateStr){
   const val = document.getElementById("shabbos-note-input")?.value.trim();
   if(!val) return;
