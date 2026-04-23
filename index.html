@@ -91,6 +91,7 @@ header{display:flex;justify-content:space-between;align-items:center;margin-bott
 .day-cell.shabbos{background:#fafaf8;border-style:dashed;cursor:pointer;opacity:0.6;}
 .day-cell.shabbos:hover{transform:translateY(-1px);box-shadow:var(--shadow);opacity:0.8;}
 .day-cell.shabbos-noted{opacity:0.85;border-style:solid;border-color:var(--border2);}
+.day-cell.overflow-cell{opacity:0.35;pointer-events:none;}
 .cell-date{font-family:'DM Mono',monospace;font-size:0.62rem;color:var(--text-dim);}
 .day-cell.today .cell-date{color:var(--accent);font-weight:700;}
 .cell-topic{font-size:0.68rem;font-weight:600;color:var(--text-mid);line-height:1.3;}
@@ -440,12 +441,10 @@ async function fetchHolidays(){
   // Fetch Hebrew date for every cell shown on the calendar grid
   const dateMap = {};
   const fetches = [];
-  for(let w=1; w<=numWeeks(); w++){
-    for(let d=0; d<7; d++){
-      const cd  = dateOfCell(w, d);
+  for(const cd of calendarDays()){
       const key = cd.toISOString().split("T")[0];
       if(dateMap[key]) continue; // already queued
-      dateMap[key] = null; // placeholder so we don't double-fetch
+      dateMap[key] = null;
       fetches.push(
         fetch(`https://www.hebcal.com/converter?cfg=json&date=${key}&g2h=1`)
           .then(r => r.json())
@@ -459,7 +458,6 @@ async function fetchHolidays(){
           })
           .catch(() => {})
       );
-    }
   }
   await Promise.all(fetches);
   hebrewDates = dateMap;
@@ -470,66 +468,83 @@ async function fetchHolidays(){
 // ─────────────────────────────────────────────
 
 // How many rows does this month's calendar need?
-function numWeeks(){
-  const y    = viewDate.getFullYear(), m = viewDate.getMonth();
-  const firstDay = new Date(y, m, 1).getDay();   // 0=Sun
-  const daysInMonth = new Date(y, m+1, 0).getDate();
-  return Math.ceil((firstDay + daysInMonth) / 7);
+// Returns array of Date objects for every cell shown on the calendar.
+// Starts on the Sunday on or before the 1st of viewDate's month,
+// ends on the Saturday on or after the last day of the month.
+function calendarDays(){
+  const y = viewDate.getFullYear(), m = viewDate.getMonth();
+  const firstOfMonth = new Date(y, m, 1);
+  const lastOfMonth  = new Date(y, m+1, 0);
+  // Walk back to Sunday
+  const start = new Date(firstOfMonth);
+  start.setDate(start.getDate() - start.getDay());
+  // Walk forward to Saturday
+  const end = new Date(lastOfMonth);
+  end.setDate(end.getDate() + (6 - end.getDay()));
+  const days = [];
+  const cur = new Date(start);
+  while(cur <= end){ days.push(new Date(cur)); cur.setDate(cur.getDate()+1); }
+  return days;
 }
-function postingSlot(targetW, targetD){
+
+// Returns the slot index for a given date (for rotating item calculation).
+// Slot = count of non-Shabbos, non-fixed days from the very beginning of the month
+// up to (but not including) this date.
+function postingSlotForDate(date){
+  const y = viewDate.getFullYear(), m = viewDate.getMonth();
   let slot = 0;
-  for(let w=1; w<=targetW; w++){
-    for(let d=0; d<7; d++){
-      if(d === 6) continue;
-      if(cfg.fixedRules.find(r => r.dayOfWeek === d)) continue;
-      if(w === targetW && d === targetD) return slot;
-      slot++;
-    }
+  // Count from the 1st of the month to this date
+  const cur = new Date(y, m, 1);
+  while(cur < date){
+    const dow = cur.getDay();
+    if(dow !== 6 && !cfg.fixedRules.find(r => r.dayOfWeek === dow)) slot++;
+    cur.setDate(cur.getDate()+1);
   }
   return slot;
 }
 
 // What topic and type does this cell get?
-function cellMeta(d, w){
-  if(d === 6){
-    // Check for a custom Shabbos note
-    const cd      = dateOfCell(w, d);
-    const dateStr = cd.toISOString().split("T")[0];
-    const note    = (cfg.shabbosNotes || {})[dateStr];
-    return { topic: note ? note.topic : "Shabbos", type:"shabbos", isPhoto:false, isShabbos:true, hasNote: !!note, note };
+function cellMetaForDate(date){
+  const dow     = date.getDay();
+  const dateStr = date.toISOString().split("T")[0];
+
+  if(dow === 6){
+    const note = (cfg.shabbosNotes || {})[dateStr];
+    return { topic: note ? note.topic : "Shabbos", type:"shabbos", isPhoto:false, isShabbos:true, hasNote:!!note, note };
   }
 
-  // Check if this date has a holiday that should override the topic
-  const cd      = dateOfCell(w, d);
-  const dateStr = cd.toISOString().split("T")[0];
+  // Holiday / Chabad override
   const holiday = jewishHolidays[dateStr];
   if(holiday && holiday.topicOverride){
-    const isPhoto = photoCapableDays().includes(d);
-    const type    = holiday.type === "chabad" ? "chabad" : "holiday";
-    return { topic: holiday.label, type, isPhoto, isShabbos:false };
+    const isPhoto = photoCapableDays().includes(dow);
+    return { topic:holiday.label, type:holiday.type==="chabad"?"chabad":"holiday", isPhoto, isShabbos:false };
   }
 
-  const fixed = cfg.fixedRules.find(r => r.dayOfWeek === d);
+  // Fixed rule
+  const fixed = cfg.fixedRules.find(r => r.dayOfWeek === dow);
   if(fixed) return { topic:fixed.topic, type:"fixed", isPhoto:false, isShabbos:false };
 
-  const slot = postingSlot(w, d);
+  // Rotating items — use slot based on actual date position in month
+  const slot      = postingSlotForDate(date);
   const photoDays = photoCapableDays();
-
   for(const item of cfg.rotatingItems){
     const n = item.everyNDays || 7;
     const offset = cfg.rotatingItems.indexOf(item);
     if(slot % n === offset % n){
-      const isPhoto = photoDays.includes(d);
+      const isPhoto = photoDays.includes(dow);
       return { topic:item.name, type:isPhoto?"photo":"rotating", isPhoto, isShabbos:false };
     }
   }
 
+  // Filler
   const pool = cfg.fillerTopics;
   return { topic: pool.length ? pool[slot % pool.length] : "—", type:"filler", isPhoto:false, isShabbos:false };
 }
 
 // Which tasks run today, with per-day overrides applied?
-function tasksForDay(meta, d, dateStr){
+function tasksForDay(meta, date){
+  const d = date.getDay();
+  const dateStr = date.toISOString().split('T')[0];
   if(meta.isShabbos) return [];
   const overrides = (cfg.dayOverrides || {})[dateStr] || {};
   const removed   = new Set(overrides.removedTasks || []);
@@ -572,15 +587,16 @@ function tasksForDay(meta, d, dateStr){
 // ─────────────────────────────────────────────
 // INSPECTOR
 // ─────────────────────────────────────────────
-function inspect(d, w){
-  const fd = dateOfCell(w, d);
-  selected = { d, w, dateStr: fd.toISOString().split("T")[0] };
+function inspect(d, w){ inspectDate(dateOfCell(w, d)); }
+function inspectDate(fd){
+  const d = fd.getDay();
+  selected = { d, dateStr: fd.toISOString().split("T")[0] };
 
   document.querySelectorAll(".day-cell").forEach(c => c.classList.remove("sel"));
-  const cell = document.querySelector(`[data-w="${w}"][data-d="${d}"]`);
+  const cell = document.querySelector(`[data-date="${selected.dateStr}"]`);
   if(cell) cell.classList.add("sel");
 
-  const meta = cellMeta(d, w);
+  const meta = cellMetaForDate(fd);
   const fmt  = fd.toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric",year:"numeric"});
   const hdate = hebrewDates[selected.dateStr];
   document.getElementById("insp-date").innerHTML =
@@ -598,13 +614,14 @@ function inspect(d, w){
     taskSec.style.display = "block";
     pushBtn.style.display = "none";
     const note = meta.note;
+    const ds = selected.dateStr;
     list.innerHTML = `
       <div class="shabbos-note">
         ${note ? `<div style="font-family:'Playfair Display',serif;font-size:1rem;color:var(--text);margin-bottom:10px">${note.topic}</div>` : `<div style="font-family:'Playfair Display',serif;font-style:italic;color:var(--text-dim);margin-bottom:10px">Rest. No tasks scheduled.</div>`}
         <div style="display:flex;gap:7px;margin-top:8px">
           <input id="shabbos-note-input" class="finput" placeholder="Add a Shabbos note or topic..." value="${note ? note.topic : ""}" style="flex:1;font-size:0.78rem">
-          <button onclick="saveShabbosNote('${selected.dateStr}')" style="padding:8px 12px;background:var(--primary);color:white;border:none;border-radius:var(--radius-sm);font-family:'Sora',sans-serif;font-size:0.74rem;font-weight:700;cursor:pointer">Save</button>
-          ${note ? `<button onclick="clearShabbosNote('${selected.dateStr}')" style="padding:8px 12px;background:var(--surface2);color:var(--text-dim);border:1px solid var(--border2);border-radius:var(--radius-sm);font-family:'Sora',sans-serif;font-size:0.74rem;cursor:pointer">Clear</button>` : ""}
+          <button onclick="saveShabbosNote('${ds}')" style="padding:8px 12px;background:var(--primary);color:white;border:none;border-radius:var(--radius-sm);font-family:'Sora',sans-serif;font-size:0.74rem;font-weight:700;cursor:pointer">Save</button>
+          ${note ? `<button onclick="clearShabbosNote('${ds}')" style="padding:8px 12px;background:var(--surface2);color:var(--text-dim);border:1px solid var(--border2);border-radius:var(--radius-sm);font-family:'Sora',sans-serif;font-size:0.74rem;cursor:pointer">Clear</button>` : ""}
         </div>
       </div>
     `;
@@ -634,7 +651,7 @@ function inspect(d, w){
   `;
 
   // Tasks
-  tasksForDay(meta, d, selected.dateStr).forEach((t, i) => {
+  tasksForDay(meta, fd).forEach((t, i) => {
     const el = document.createElement("div");
     el.className = "task-row";
     el.style.animationDelay = `${i * 0.04}s`;
@@ -683,8 +700,8 @@ async function getHebrewDate(dateStr){
 
 async function pushToMonday(){
   const btn   = document.getElementById("btn-push");
-  const meta  = cellMeta(selected.d, selected.w);
-  const tasks = tasksForDay(meta, selected.d, selected.dateStr);
+  const meta  = cellMetaForDate(new Date(selected.dateStr));
+  const tasks = tasksForDay(meta, new Date(selected.dateStr));
   // Apply topic override if set
   const overrides = (cfg.dayOverrides || {})[selected.dateStr] || {};
   const topic = overrides.topic || meta.topic;
@@ -732,13 +749,12 @@ function buildCalendar(){
   head.innerHTML = ""; grid.innerHTML = "";
   DAY_SHORT.forEach(d => head.innerHTML += `<div class="col-label">${d}</div>`);
 
-  const weeks = numWeeks();
-  for(let w=1; w<=weeks; w++){
-    for(let d=0; d<7; d++){
-      const meta    = cellMeta(d, w);
-      const cd      = dateOfCell(w, d);
-      const isToday = cd.toDateString() === now.toDateString();
-      const dateStr = cd.toISOString().split("T")[0];
+  for(const cd of calendarDays()){
+    const d       = cd.getDay();
+    const isCurrentMonthCell = cd.getMonth() === viewDate.getMonth();
+    const meta    = cellMetaForDate(cd);
+    const isToday = cd.toDateString() === now.toDateString();
+    const dateStr = cd.toISOString().split("T")[0];
       const holidayObj = jewishHolidays[dateStr] || null;
       const holidayLabel = holidayObj ? holidayObj.label : null;
       const holidayType  = holidayObj ? holidayObj.type  : null;
@@ -751,9 +767,10 @@ function buildCalendar(){
         meta.isShabbos && meta.hasNote ? "shabbos-noted" : "",
         holidayObj ? "has-holiday" : "",
         holidayType === "chabad" ? "has-chabad" : "",
+        !isCurrentMonthCell ? "overflow-cell" : "",
       ].filter(Boolean).join(" ");
-      cell.dataset.w = w; cell.dataset.d = d;
-      cell.onclick = () => inspect(d, w); // all cells clickable, including Shabbos
+      cell.dataset.date = dateStr;
+      cell.onclick = () => inspectDate(cd);
       const hdate        = hebrewDates[dateStr];
       const hdateDisplay = hdate ? `${hdate.hd} ${hdate.hm}` : "";
       const hasOverride  = !!(cfg.dayOverrides && cfg.dayOverrides[dateStr] && (
@@ -773,20 +790,15 @@ function buildCalendar(){
         ${hasOverride ? '<span style="position:absolute;top:6px;right:6px;width:6px;height:6px;border-radius:50%;background:var(--accent)"></span>' : ""}
       `;
       grid.appendChild(cell);
-      if(isToday) selected = { d, w, dateStr };
+      if(isToday) selected = { d, dateStr };
     }
-  }
   // If no today found (different month), select first cell of the month
   if(!isCurrentMonth){
-    outer: for(let w=1;w<=weeks;w++) for(let d=0;d<7;d++){
-      const cd2 = dateOfCell(w,d);
-      if(cd2.getMonth()===viewDate.getMonth()){
-        selected={d,w,dateStr:cd2.toISOString().split("T")[0]};
-        break outer;
-      }
-    }
+    const days = calendarDays();
+    const first = days.find(d => d.getMonth()===viewDate.getMonth());
+    if(first) selected = { d: first.getDay(), dateStr: first.toISOString().split("T")[0] };
   }
-  inspect(selected.d, selected.w);
+  inspectDate(new Date(selected.dateStr));
 }
 
 // ─────────────────────────────────────────────
@@ -818,7 +830,7 @@ async function saveTopic(dateStr){
   const ov = getOverride(dateStr);
   ov.topic = val;
   await saveCfg(cfg);
-  inspect(selected.d, selected.w);
+  inspectDate(new Date(selected.dateStr));
   buildCalendar();
 }
 
@@ -833,7 +845,7 @@ async function removeTask(dateStr, taskId){
     if(!ov.removedTasks.includes(taskId)) ov.removedTasks.push(taskId);
   }
   await saveCfg(cfg);
-  inspect(selected.d, selected.w);
+  inspectDate(new Date(selected.dateStr));
 }
 
 async function addTask(dateStr){
@@ -844,14 +856,14 @@ async function addTask(dateStr){
   if(!ov.addedTasks) ov.addedTasks = [];
   ov.addedTasks.push({ label: val });
   await saveCfg(cfg);
-  inspect(selected.d, selected.w);
+  inspectDate(new Date(selected.dateStr));
 }
 
 async function clearDayOverrides(dateStr){
   if(!cfg.dayOverrides) return;
   delete cfg.dayOverrides[dateStr];
   await saveCfg(cfg);
-  inspect(selected.d, selected.w);
+  inspectDate(new Date(selected.dateStr));
   buildCalendar();
 }
 
@@ -864,7 +876,7 @@ async function saveShabbosNote(dateStr){
   buildCalendar();
   // Re-select the Shabbos cell
   const cell = document.querySelector(`[data-w="${selected.w}"][data-d="6"]`);
-  if(cell) inspect(6, selected.w);
+  if(cell) inspectDate(new Date(selected.dateStr));
 }
 
 async function clearShabbosNote(dateStr){
@@ -872,7 +884,7 @@ async function clearShabbosNote(dateStr){
   delete cfg.shabbosNotes[dateStr];
   try { await saveCfg(cfg); } catch(e){ alert("Save failed: " + e.message); return; }
   buildCalendar();
-  inspect(6, selected.w);
+  inspectDate(new Date(selected.dateStr));
 }
 
 function openDrawer(){ renderTab(); document.getElementById("overlay").classList.add("open"); document.getElementById("drawer").classList.add("open"); }
