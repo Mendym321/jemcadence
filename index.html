@@ -575,7 +575,7 @@ function tasksForDay(meta, date){
       label:      a.label,
       isPhotoSwap:false,
       mondayId:   0,
-      colorIdx:   6,
+      colorIdx:   a.colorIdx ?? 6,
       mondayName: null,
       isAdded:    true,
     });
@@ -664,14 +664,28 @@ function inspectDate(fd){
     list.appendChild(el);
   });
 
-  // Add task row
+  // Add task row — platform picker
   const addRow = document.createElement("div");
-  addRow.style.cssText = "display:flex;gap:7px;margin-top:8px";
+  addRow.style.cssText = "display:flex;flex-direction:column;gap:6px;margin-top:10px;padding-top:10px;border-top:1px solid var(--border)";
+  const platformOptions = cfg.platforms.map((p,i) =>
+    `<option value="${i}">${p.name}</option>`
+  ).join("") + `<option value="custom">Custom...</option>`;
   addRow.innerHTML = `
-    <input id="add-task-input" class="finput" placeholder="Add a one-off task for this day..." style="flex:1;font-size:0.78rem" onkeydown="if(event.key==='Enter')addTask('${selected.dateStr}')">
-    <button onclick="addTask('${selected.dateStr}')" style="padding:8px 12px;background:var(--primary-light);border:1px solid rgba(26,86,219,0.3);border-radius:var(--radius-sm);font-family:'Sora',sans-serif;font-size:0.74rem;font-weight:700;color:var(--primary);cursor:pointer">+ Add</button>
+    <div style="font-family:'DM Mono',monospace;font-size:0.55rem;letter-spacing:0.15em;color:var(--text-dim);text-transform:uppercase">Add task for this day only</div>
+    <div style="display:flex;gap:7px;align-items:center">
+      <select id="add-task-platform" class="finput" style="flex:1;font-size:0.78rem" onchange="onAddPlatformChange()">
+        ${platformOptions}
+      </select>
+      <select id="add-task-content" class="finput" style="flex:1;font-size:0.78rem"></select>
+      <button onclick="addTask('${selected.dateStr}')" style="padding:8px 12px;background:var(--primary-light);border:1px solid rgba(26,86,219,0.3);border-radius:var(--radius-sm);font-family:'Sora',sans-serif;font-size:0.74rem;font-weight:700;color:var(--primary);cursor:pointer;white-space:nowrap">+ Add</button>
+    </div>
+    <div id="add-task-custom" style="display:none">
+      <input id="add-task-custom-input" class="finput" placeholder="Custom task description..." style="font-size:0.78rem">
+    </div>
   `;
   list.appendChild(addRow);
+  // Populate the content dropdown for the first platform
+  onAddPlatformChange();
 
   // Show override indicator if any overrides exist
   if(overrides.topic || (overrides.removedTasks||[]).length || (overrides.addedTasks||[]).length){
@@ -779,16 +793,22 @@ function buildCalendar(){
         (cfg.dayOverrides[dateStr].addedTasks||[]).length
       ));
       const displayTopic = (cfg.dayOverrides?.[dateStr]?.topic) || meta.topic;
-      cell.innerHTML = `
-        <div class="cell-top-row">
-          <span class="cell-date">${cd.getDate()}</span>
-          ${hdateDisplay ? `<span class="cell-hdate">${hdateDisplay}</span>` : ""}
-        </div>
-        <span class="cell-topic">${displayTopic}</span>
-        ${holidayLabel ? `<span class="holiday-tag ${holidayType === "chabad" ? "holiday-tag-chabad" : ""}">${holidayLabel}</span>` : ""}
-        ${isToday ? '<span class="today-tag">TODAY</span>' : ""}
-        ${hasOverride ? '<span style="position:absolute;top:6px;right:6px;width:6px;height:6px;border-radius:50%;background:var(--accent)"></span>' : ""}
-      `;
+
+      // Overflow cells (prev/next month spillover) show only the date number
+      if(!isCurrentMonthCell){
+        cell.innerHTML = `<span class="cell-date">${cd.getDate()}</span>`;
+      } else {
+        cell.innerHTML = `
+          <div class="cell-top-row">
+            <span class="cell-date">${cd.getDate()}</span>
+            ${hdateDisplay ? `<span class="cell-hdate">${hdateDisplay}</span>` : ""}
+          </div>
+          <span class="cell-topic">${displayTopic}</span>
+          ${holidayLabel ? `<span class="holiday-tag ${holidayType === "chabad" ? "holiday-tag-chabad" : ""}">${holidayLabel}</span>` : ""}
+          ${isToday ? '<span class="today-tag">TODAY</span>' : ""}
+          ${hasOverride ? '<span style="position:absolute;top:6px;right:6px;width:6px;height:6px;border-radius:50%;background:var(--accent)"></span>' : ""}
+        `;
+      }
       grid.appendChild(cell);
       if(isToday) selected = { d, dateStr };
     }
@@ -848,15 +868,50 @@ async function removeTask(dateStr, taskId){
   inspectDate(new Date(selected.dateStr));
 }
 
+function onAddPlatformChange(){
+  const sel        = document.getElementById("add-task-platform");
+  const contentSel = document.getElementById("add-task-content");
+  const customDiv  = document.getElementById("add-task-custom");
+  if(!sel || !contentSel) return;
+  if(sel.value === "custom"){
+    contentSel.style.display = "none";
+    if(customDiv) customDiv.style.display = "block";
+    return;
+  }
+  if(customDiv) customDiv.style.display = "none";
+  contentSel.style.display = "";
+  const p = cfg.platforms[parseInt(sel.value)];
+  if(!p) return;
+  const opts = [`<option value="${p.content}">${p.content}</option>`];
+  if(p.photoContent && p.photoContent !== p.content)
+    opts.push(`<option value="${p.photoContent}">${p.photoContent}</option>`);
+  opts.push(`<option value="custom">Custom...</option>`);
+  contentSel.innerHTML = opts.join("");
+  contentSel.onchange = () => {
+    if(customDiv) customDiv.style.display = contentSel.value === "custom" ? "block" : "none";
+  };
+}
+
 async function addTask(dateStr){
-  const inp = document.getElementById("add-task-input");
-  const val = inp?.value.trim();
-  if(!val) return;
+  const platSel    = document.getElementById("add-task-platform");
+  const contentSel = document.getElementById("add-task-content");
+  const customInp  = document.getElementById("add-task-custom-input");
+  let label, colorIdx = 6;
+  if(platSel.value === "custom"){
+    label = customInp?.value.trim();
+  } else {
+    const idx = parseInt(platSel.value);
+    const p   = cfg.platforms[idx];
+    const content = (contentSel?.value === "custom") ? (customInp?.value.trim() || p.content) : (contentSel?.value || p.content);
+    label    = `${p.name} — ${content}`;
+    colorIdx = p.colorIdx ?? idx % 7;
+  }
+  if(!label) return;
   const ov = getOverride(dateStr);
   if(!ov.addedTasks) ov.addedTasks = [];
-  ov.addedTasks.push({ label: val });
+  ov.addedTasks.push({ label, colorIdx });
   await saveCfg(cfg);
-  inspectDate(new Date(selected.dateStr));
+  inspectDate(new Date(dateStr));
 }
 
 async function clearDayOverrides(dateStr){
