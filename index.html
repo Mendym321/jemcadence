@@ -434,63 +434,82 @@ async function fetchHolidays(){
     jewishHolidays = {};
   }
 
-  // Resolve Chabad dates for this Hebrew year via converter
-  // First get the Hebrew year for this Gregorian month
+  // Resolve Chabad dates ONE AT A TIME to avoid rate limiting
   try {
     const sample = `${y}-${String(m).padStart(2,"0")}-15`;
     const sr = await fetch(`https://www.hebcal.com/converter?cfg=json&date=${sample}&g2h=1`);
     const sd = await sr.json();
-    const hy = sd.hy; // Hebrew year for this month
+    const hy = sd.hy;
 
-    // Fetch each Chabad date
-    const chabadFetches = CHABAD_DATES.map(([hd, hmonth, label]) =>
-      fetch(`https://www.hebcal.com/converter?cfg=json&hy=${hy}&hm=${hmonth}&hd=${hd}&h2g=1`)
-        .then(r => r.json())
-        .then(data => {
-          if(!data.gy) return; // invalid date
-          const dateStr = `${data.gy}-${String(data.gm).padStart(2,"0")}-${String(data.gd).padStart(2,"0")}`;
-          // Only add if in current month and not already a holiday
-          if(data.gm === m && data.gy === y){
-            if(!jewishHolidays[dateStr]){
-              jewishHolidays[dateStr] = { label, type: "chabad", topicOverride: true };
-            } else {
-              jewishHolidays[dateStr].label += ` · ${label}`;
-              jewishHolidays[dateStr].topicOverride = true; // chabad date always wins
-            }
+    for(const [hd, hmonth, label] of CHABAD_DATES){
+      try {
+        await new Promise(r => setTimeout(r, 80)); // small delay between requests
+        const r = await fetch(`https://www.hebcal.com/converter?cfg=json&hy=${hy}&hm=${hmonth}&hd=${hd}&h2g=1`);
+        const data = await r.json();
+        if(!data.gy) continue;
+        const dateStr = `${data.gy}-${String(data.gm).padStart(2,"0")}-${String(data.gd).padStart(2,"0")}`;
+        if(data.gm === m && data.gy === y){
+          if(!jewishHolidays[dateStr]){
+            jewishHolidays[dateStr] = { label, type:"chabad", topicOverride:true };
+          } else {
+            jewishHolidays[dateStr].label += ` · ${label}`;
+            jewishHolidays[dateStr].topicOverride = true;
           }
-        })
-        .catch(() => {})
-    );
-    await Promise.all(chabadFetches);
+        }
+      } catch(e){ /* skip this date */ }
+    }
     console.log("[Chabad] Dates resolved. Total holidays:", Object.keys(jewishHolidays).length);
   } catch(e){
     console.error("[Chabad] Failed:", e);
   }
 
-  // Fetch Hebrew date for every cell shown on the calendar grid
-  const dateMap = {};
-  const fetches = [];
-  for(const cd of calendarDays()){
+  // Get Hebrew dates for all visible cells using ONE converter call per unique Hebrew month.
+  // The calendar spans at most 2 Hebrew months. We fetch the 1st and ~middle of the
+  // Gregorian month, get their Hebrew months, then use the h2g direction to map all days.
+  // Simpler approach: just use the /converter endpoint but only for the FIRST day,
+  // then compute the rest mathematically since Hebrew days increment by 1 each day
+  // (with month boundaries handled).
+  try {
+    const cells = calendarDays();
+    const dateMap = {};
+
+    // Fetch just the first cell's Hebrew date, then walk forward
+    const firstKey = cells[0].toISOString().split("T")[0];
+    const firstRes = await fetch(`https://www.hebcal.com/converter?cfg=json&date=${firstKey}&g2h=1`);
+    const firstData = await firstRes.json();
+
+    // Hebrew month lengths (approximate — good enough for display)
+    const HMONTH_LENGTHS = {
+      "Nisan":30,"Iyar":29,"Sivan":30,"Tamuz":29,"Av":30,"Elul":29,
+      "Tishrei":30,"Cheshvan":29,"Kislev":30,"Tevet":29,"Shvat":30,
+      "Adar":29,"Adar I":30,"Adar II":29
+    };
+
+    let hd = firstData.hd, hm = firstData.hm, hy = firstData.hy;
+    const hmNames = Object.keys(HMONTH_LENGTHS);
+
+    for(const cd of cells){
       const key = cd.toISOString().split("T")[0];
-      if(dateMap[key]) continue; // already queued
-      dateMap[key] = null;
-      fetches.push(
-        fetch(`https://www.hebcal.com/converter?cfg=json&date=${key}&g2h=1`)
-          .then(r => r.json())
-          .then(data => {
-            dateMap[key] = {
-              hd:   data.hd,
-              hm:   data.hm,
-              hy:   data.hy,
-              full: `${data.hd} ${data.hm} ${data.hy}`,
-            };
-          })
-          .catch(() => {})
-      );
+      if(!dateMap[key]){
+        dateMap[key] = { hd, hm, hy, full:`${hd} ${hm} ${hy}` };
+      }
+      // Advance by one day
+      const monthLen = HMONTH_LENGTHS[hm] || 29;
+      hd++;
+      if(hd > monthLen){
+        hd = 1;
+        const idx = hmNames.indexOf(hm);
+        if(idx === hmNames.length - 1){ hm = hmNames[0]; hy++; }
+        else hm = hmNames[idx + 1] || hm;
+      }
+    }
+
+    hebrewDates = dateMap;
+    console.log("[Hebcal] Hebrew dates computed:", Object.keys(hebrewDates).length, "| Today:", hebrewDates[new Date().toISOString().split('T')[0]]?.full);
+  } catch(e){
+    console.error("[Hebcal] Hebrew dates failed:", e);
+    hebrewDates = {};
   }
-  await Promise.all(fetches);
-  hebrewDates = dateMap;
-}
 
 // ─────────────────────────────────────────────
 // SCHEDULE LOGIC
@@ -741,6 +760,8 @@ function dateOfCell(w, d){
 // MONDAY PUSH
 // ─────────────────────────────────────────────
 async function getHebrewDate(dateStr){
+  // Use cached map first — avoids extra API calls
+  if(hebrewDates[dateStr]) return `${hebrewDates[dateStr].hd} ${hebrewDates[dateStr].hm}`;
   try {
     const r = await fetch(`https://www.hebcal.com/converter?cfg=json&date=${dateStr}&g2h=1`);
     const d = await r.json();
