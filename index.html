@@ -260,6 +260,7 @@ select.finput{cursor:pointer;}
     <button class="dtab"     onclick="tab('rotating')">Rotating</button>
     <button class="dtab"     onclick="tab('filler')">Filler Topics</button>
     <button class="dtab"     onclick="tab('platforms')">Platforms</button>
+    <button class="dtab"     onclick="tab('notifications')">Notifications</button>
   </div>
   <div class="drawer-body" id="drawer-body"></div>
   <div class="drawer-foot">
@@ -321,6 +322,12 @@ const DEFAULTS = {
     "Life Advice","Anxiety","Current Events","Anti-semitism",
     "Happiness","Nature of a Jew","Moshiach","Interesting Dollars","Productivity",
   ],
+
+  // Monday comment settings
+  mentionSettings: {
+    commentTemplate: "Today's suggested topic is {topic}",
+    notifyIds: [75424088, 40265103], // Mendel + Zalmen by default
+  },
 };
 
 // Days where both WA and SM post = photo-capable days.
@@ -741,14 +748,26 @@ async function getHebrewDate(dateStr){
   } catch { return null; }
 }
 
-async function mondayRequest(query){
+async function mondayRequest(query, apiVersion="2023-10"){
   const res = await fetch("https://api.monday.com/v2", {
     method:  "post",
-    headers: { "Content-Type":"application/json", "Authorization":MONDAY_KEY, "API-Version":"2023-10" },
+    headers: { "Content-Type":"application/json", "Authorization":MONDAY_KEY, "API-Version":apiVersion },
     body:    JSON.stringify({ query }),
   });
   return res.json();
 }
+
+// Full team roster with real Monday account IDs — no API lookup needed
+const TEAM_ROSTER = [
+  { name:"Mendel Marcus",   id:75424088, email:"mendelmarcus@gmail.com"   },
+  { name:"Zalmen Goldberg", id:40265103, email:"zgoldberg@jemedia.org"     },
+  { name:"Yisroel Slonim", id:40257281, email:""                          },
+  { name:"Yosef Eagle",     id:68443231, email:""                          },
+  { name:"Tzemach Goldberg",id:40309901, email:""                          },
+  { name:"Shan Gonzalez",   id:57141139, email:""                          },
+  { name:"Schneur Bergstein",id:76232517,email:""                          },
+  { name:"Mushky Support",  id:76223137, email:""                          },
+];
 
 // Push a single date to Monday — returns list of created item IDs
 async function pushDateToMonday(dateStr){
@@ -778,10 +797,18 @@ async function pushDateToMonday(dateStr){
       const itemId = res?.data?.create_item?.id;
       if(itemId){
         createdIds.push(itemId);
-        // Post a comment with topic and team tags
-        const commentBody = `Today's suggested topic is ${topic} @zgoldberg@jemedia.org @mendelmarcus@gmail.com`;
-        const commentQ = `mutation { create_update(item_id: ${itemId}, body: ${JSON.stringify(commentBody)}) { id } }`;
-        await mondayRequest(commentQ);
+
+        const ms = cfg.mentionSettings || DEFAULTS.mentionSettings;
+        const commentBody = (ms.commentTemplate || "Today's suggested topic is {topic}")
+          .replace("{topic}", topic);
+        const notifyIds  = ms.notifyIds || [];
+        const mentionsList = notifyIds.map(id => `{id: ${id}, type: User}`).join(", ");
+
+        const commentQ = mentionsList
+          ? `mutation { create_update(item_id: ${itemId}, body: ${JSON.stringify(commentBody)}, mentions_list: [${mentionsList}]) { id } }`
+          : `mutation { create_update(item_id: ${itemId}, body: ${JSON.stringify(commentBody)}) { id } }`;
+
+        await mondayRequest(commentQ, "2025-07");
       }
     } catch(e){ console.error(e); }
   }
@@ -1063,15 +1090,16 @@ async function goToToday(){
 }
 function tab(name){
   activeTab = name;
-  document.querySelectorAll(".dtab").forEach((t,i) => t.classList.toggle("on", ["fixed","rotating","filler","platforms"][i]===name));
+  document.querySelectorAll(".dtab").forEach((t,i) => t.classList.toggle("on", ["fixed","rotating","filler","platforms","notifications"][i]===name));
   renderTab();
 }
 function renderTab(){
   const body = document.getElementById("drawer-body");
-  if(activeTab==="fixed")     renderFixed(body);
-  if(activeTab==="rotating")  renderRotating(body);
-  if(activeTab==="filler")    renderFiller(body);
-  if(activeTab==="platforms") renderPlatforms(body);
+  if(activeTab==="fixed")         renderFixed(body);
+  if(activeTab==="rotating")      renderRotating(body);
+  if(activeTab==="filler")        renderFiller(body);
+  if(activeTab==="platforms")     renderPlatforms(body);
+  if(activeTab==="notifications") renderNotifications(body);
 }
 
 // ── Fixed Rules ──
@@ -1242,6 +1270,8 @@ async function saveCfg(data){
 
 // ─────────────────────────────────────────────
 // CHANGE TRACKING
+// NOTE: Firestore rules must allow read/write for changeLog:
+//   match /changeLog/{doc} { allow read, write: if true; }
 // ─────────────────────────────────────────────
 const TEAM = ["Mendel", "Zalmen", "Yisroel", "Yosef"];
 let pendingSaveAction = null; // holds the save callback until author is chosen
@@ -1366,7 +1396,51 @@ function closeLogModal(){
 // ─────────────────────────────────────────────
 let undoCfg = null;
 
+async function renderNotifications(body){
+  const ms = cfg.mentionSettings || clone(DEFAULTS.mentionSettings);
+  if(!cfg.mentionSettings) cfg.mentionSettings = ms;
+  const notifyIds = ms.notifyIds || [];
+
+  body.innerHTML = `
+    <div class="sec-title">Monday Comment Settings</div>
+    <div class="hint">When items are pushed to Monday, a comment is automatically posted on each item. Configure the message and who gets notified below.</div>
+
+    <div style="display:flex;flex-direction:column;gap:6px">
+      <div class="sublabel">Comment template</div>
+      <div class="hint">Use <code style="background:var(--surface2);padding:1px 5px;border-radius:4px;font-size:0.72rem">{topic}</code> to insert the day's topic.</div>
+      <textarea id="comment-template" class="finput" rows="3" style="resize:vertical;font-size:0.78rem;line-height:1.5">${ms.commentTemplate || "Today's suggested topic is {topic}"}</textarea>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:8px">
+      <div class="sublabel">Notify these people</div>
+      <div class="hint">Selected people will be @mentioned in the comment and notified on Monday.</div>
+      <div style="display:flex;flex-direction:column;gap:6px" id="notify-list">
+        ${TEAM_ROSTER.map(member => `
+          <label style="display:flex;align-items:center;gap:10px;padding:10px 13px;background:var(--surface2);border:1px solid ${notifyIds.includes(member.id) ? 'var(--primary)' : 'var(--border)'};border-radius:var(--radius-sm);cursor:pointer;transition:all .15s">
+            <input type="checkbox" ${notifyIds.includes(member.id) ? 'checked' : ''} onchange="toggleNotify(${member.id})"
+              style="width:15px;height:15px;accent-color:var(--primary);cursor:pointer;flex-shrink:0">
+            <span style="font-size:0.8rem;font-weight:600;color:var(--text)">${member.name}</span>
+          </label>
+        `).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function toggleNotify(id){
+  if(!cfg.mentionSettings) cfg.mentionSettings = clone(DEFAULTS.mentionSettings);
+  const ids = cfg.mentionSettings.notifyIds || [];
+  const idx = ids.indexOf(id);
+  if(idx === -1) ids.push(id); else ids.splice(idx, 1);
+  cfg.mentionSettings.notifyIds = ids;
+  // Update border colors live
+  renderNotifications(document.getElementById("drawer-body"));
+}
+
 async function saveAndClose(){
+  // Collect comment template if on notifications tab
+  const tmpl = document.getElementById("comment-template");
+  if(tmpl && cfg.mentionSettings) cfg.mentionSettings.commentTemplate = tmpl.value.trim() || DEFAULTS.mentionSettings.commentTemplate;
   if(!confirm("This will update the calendar for everyone.\n\nSave changes?")) return;
   promptAuthorThenSave(async () => {
     const btn = document.querySelector(".btn-save");
