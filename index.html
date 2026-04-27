@@ -862,21 +862,24 @@ async function pushWeekToMonday(){
   const btn = document.getElementById("btn-push-week");
   btn.disabled = true; btn.innerText = "Pushing week...";
 
-  const selDate = new Date(selected.dateStr);
+  const selDate = new Date(selected.dateStr + "T12:00:00"); // noon to avoid timezone issues
   const sunday  = new Date(selDate);
   sunday.setDate(selDate.getDate() - selDate.getDay());
 
   const today = new Date();
   today.setHours(0,0,0,0);
-  const isFutureMonth = selDate > today;
+  const isFutureWeek = sunday >= today;
+
+  console.log("[Push Week] selected.dateStr:", selected.dateStr, "| sunday:", sunday.toDateString(), "| isFutureWeek:", isFutureWeek);
 
   let pushed = 0;
   for(let i = 0; i <= 5; i++){
     const d = new Date(sunday);
     d.setDate(sunday.getDate() + i);
-    // For future months push everything; for current/past month skip past days
-    if(!isFutureMonth && d < today) continue;
+    // Skip past days only if we're in the current week
+    if(!isFutureWeek && d < today) continue;
     const dateStr = d.toISOString().split("T")[0];
+    console.log("[Push Week] Pushing:", dateStr);
     try {
       const ids = await pushDateToMonday(dateStr);
       pushed += ids.length;
@@ -884,7 +887,11 @@ async function pushWeekToMonday(){
   }
 
   btn.innerText = `Done — ${pushed} items pushed`;
-  setTimeout(() => { btn.disabled=false; btn.innerText="Push remaining week"; }, 4000);
+  setTimeout(() => {
+    btn.disabled = false;
+    const t = new Date(); t.setHours(0,0,0,0);
+    btn.innerText = new Date(selected.dateStr) > t ? "Push full week" : "Push remaining week";
+  }, 4000);
 }
 function buildCalendar(){
   const now  = new Date();
