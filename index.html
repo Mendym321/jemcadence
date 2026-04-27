@@ -208,6 +208,1273 @@ select.finput{cursor:pointer;}
         <div class="task-list" id="task-list"></div>
       </div>
       <button class="btn-push" id="btn-push" onclick="pushToMonday()" style="display:none">Push to Monday.com</button>
+      <button class="btn-push" id="btn-push-week" onclick="pushWeekToMonday()" style="display:none;margin-top:6px;background:#0f6038;font-size:0.72rem">Push remaining week</button>
+      <div class="conn-line"><div class="conn-dot"></div><span>Board connected</span></div>
+    </section>
+
+    <section class="cal-panel">
+      <div class="legend">
+        <div class="leg-item"><div class="leg-pip" style="background:var(--accent)"></div>Fixed</div>
+        <div class="leg-item"><div class="leg-pip" style="background:var(--purple)"></div>Rotating</div>
+        <div class="leg-item"><div class="leg-pip" style="background:var(--red)"></div>Photo Day</div>
+        <div class="leg-item"><div class="leg-pip" style="background:var(--primary)"></div>Filler</div>
+        <div class="leg-item"><div class="leg-pip" style="background:var(--border2);border:1px dashed var(--border2)"></div>Shabbos</div>
+        <div class="leg-item"><div class="leg-pip" style="background:#1a56db;border-radius:50%"></div>Holiday</div>
+        <div class="leg-item"><div class="leg-pip" style="background:#7e22ce;border-radius:50%"></div>Chabad</div>
+      </div>
+      <div class="cal-head" id="cal-head"></div>
+      <div class="cal-grid" id="cal-grid"></div>
+    </section>
+  </div>
+</div>
+
+<div class="overlay" id="overlay" onclick="closeDrawer()"></div>
+<div class="drawer" id="drawer">
+  <div class="drawer-head">
+    <div class="drawer-head-title">Edit Schedule</div>
+    <button class="btn-close" onclick="closeDrawer()">x</button>
+  </div>
+  <div class="drawer-tabs">
+    <button class="dtab on"  onclick="tab('fixed')">Fixed Rules</button>
+    <button class="dtab"     onclick="tab('rotating')">Rotating</button>
+    <button class="dtab"     onclick="tab('filler')">Filler Topics</button>
+    <button class="dtab"     onclick="tab('platforms')">Platforms</button>
+  </div>
+  <div class="drawer-body" id="drawer-body"></div>
+  <div class="drawer-foot">
+    <button class="btn-reset" onclick="resetDefaults()">Reset Defaults</button>
+    <button class="btn-save"  onclick="saveAndClose()">Save & Rebuild</button>
+  </div>
+</div>
+
+<script>
+// ─────────────────────────────────────────────
+// MONDAY CONFIG
+// ─────────────────────────────────────────────
+const MONDAY_KEY   = "eyJhbGciOiJIUzI1NiJ9.eyJ0aWQiOjY0ODM5NzA4MSwiYWFpIjoxMSwidWlkIjo3NTQyNDA4OCwiaWFkIjoiMjAyNi0wNC0yMVQxNTo0MjowOS44NjlaIiwicGVyIjoibWU6d3JpdGUiLCJhY3RpZCI6MTEwOTQzNjUsInJnbiI6InVzZTEifQ.eiAwSXtLKmQshHbxn5cebxt0YrqSMqsNKqLnbSOVERc";
+const MONDAY_BOARD = "9015757470";
+const COL_DATE     = "date_mkqjwbae";
+const COL_TYPE     = "color_mkqem20m";
+
+// ─────────────────────────────────────────────
+// DEFAULT CONFIG
+// ─────────────────────────────────────────────
+// PLATFORMS
+// activeDays: which days of week this platform posts (0=Sun...5=Fri). [] = every day.
+// photoContent: what it posts on a photo day. null = not photo-aware (always same).
+// plainMonday: push to Monday with a fixed label, no topic/date.
+// mondayId: the label index in Monday's type column.
+//
+// PHOTO DAY LOGIC (automatic, not configurable):
+// A rotating item landing on a day that has BOTH WA and SM is a photo day.
+// Photo-capable days: Sun(0), Tue(2), Thu(4).
+// On those days: WA posts photoContent, SM posts photoContent, X still posts normally.
+
+const DEFAULTS = {
+  platforms: [
+    { name:"WhatsApp",          content:"Daily Video",   photoContent:"Photo Blast",   activeDays:[],    mondayId:0,  plainMonday:false, colorIdx:0 },
+    { name:"SM Video",          content:"Video",         photoContent:"Photo Post",    activeDays:[0,2,4], mondayId:6,  plainMonday:false, colorIdx:1 },
+    { name:"X (Twitter)",       content:"Post",          photoContent:null,            activeDays:[0,2,4], mondayId:4,  plainMonday:false, colorIdx:2 },
+    { name:"JEM.tv",            content:"Update",        photoContent:null,            activeDays:[1,4], mondayId:11, plainMonday:true,  colorIdx:3 },
+    { name:"JEM Members Email", content:"Email",         photoContent:null,            activeDays:[4],   mondayId:10, plainMonday:true,  colorIdx:4 },
+    { name:"YT Community",      content:"Post",          photoContent:null,            activeDays:[5],   mondayId:6,  plainMonday:false,  colorIdx:5 },
+  ],
+
+  // Fixed rules: specific day always gets this topic, overrides rotating & filler.
+  fixedRules: [
+    { dayOfWeek:5, topic:"Parsha Focus" },
+    { dayOfWeek:1, topic:"Business"     },
+  ],
+
+  // Rotating items cycle through posting slots.
+  // everyNDays = every N active posting days.
+  // isPhotoDay is computed automatically — no need to set it here.
+  rotatingItems: [
+    { name:"Archival Photo", everyNDays:7  },
+    { name:"Niggun",         everyNDays:10 },
+    { name:"Israel Update",  everyNDays:14 },
+    { name:"Self Help",      everyNDays:20 },
+  ],
+
+  fillerTopics: [
+    "Life Advice","Anxiety","Current Events","Anti-semitism",
+    "Happiness","Nature of a Jew","Moshiach","Interesting Dollars","Productivity",
+  ],
+};
+
+// Days where both WA and SM post = photo-capable days.
+// Computed from platforms config so it stays in sync if user edits platforms.
+function photoCapableDays(){
+  const wa = cfg.platforms.find(p => p.name === "WhatsApp");
+  const sm = cfg.platforms.find(p => p.photoContent && p.name !== "WhatsApp");
+  if(!wa || !sm) return [];
+  const waDays = wa.activeDays.length === 0 ? [0,1,2,3,4,5] : wa.activeDays;
+  const smDays = sm.activeDays.length === 0 ? [0,1,2,3,4,5] : sm.activeDays;
+  return waDays.filter(d => smDays.includes(d));
+}
+
+// ─────────────────────────────────────────────
+// STATE
+// cfg starts as DEFAULTS, gets overwritten by Firebase on init
+// ─────────────────────────────────────────────
+let cfg = clone(DEFAULTS);
+let selected = { d:1, w:1, dateStr:"" };
+let activeTab = "fixed";
+let viewDate  = new Date(); // the month currently being viewed
+
+const DAY_NAMES = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+const DAY_SHORT = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+const DAY_CHIPS = ["Sun","Mon","Tue","Wed","Thu","Fri"];
+
+function clone(x){ return JSON.parse(JSON.stringify(x)); }
+
+// ─────────────────────────────────────────────
+// JEWISH HOLIDAYS (fetched from Hebcal on load)
+// Map of "YYYY-MM-DD" -> holiday name string
+// ─────────────────────────────────────────────
+let jewishHolidays = {};
+let hebrewDates    = {}; // "YYYY-MM-DD" -> { hd, hm, hy, full }
+
+async function fetchHolidays(){
+  const now = new Date();
+  const y = viewDate.getFullYear(), m = viewDate.getMonth() + 1;
+
+  // Modern/Israeli holidays to exclude by title
+  const MODERN_FILTER = new Set([
+    "Yom HaShoah","Yom HaZikaron","Yom HaAtzma'ut","Yom Yerushalayim",
+    "Herzl Day","Ze'ev Jabotinsky Day","Yitzhak Rabin Memorial Day",
+    "Sigd","Ben-Gurion Day","Family Day",
+  ]);
+
+  // Chabad Chassidic dates: [Hebrew day, Hebrew month, display label]
+  const CHABAD_DATES = [
+    [10, "Shvat",   "Yud Shevat"],
+    [22, "Shvat",   "Chof Beis Shevat"],
+    [2,  "Nisan",   "Beis Nissan"],
+    [11, "Nisan",   "Yud Alef Nissan"],
+    [2,  "Iyar",    "Beis Iyar"],
+    [20, "Cheshvan","Chof Cheshvan"],
+    [9,  "Kislev",  "Tes Kislev"],
+    [14, "Kislev",  "Yud Daled Kislev"],
+    [19, "Kislev",  "Yud Tes Kislev"],
+    [24, "Tevet",   "Chof Dalet Tevet"],
+    [5,  "Tevet",   "Hey Tevet"],
+    [25, "Adar",    "Chof Hey Adar"],
+    [3,  "Tamuz",   "Gimmel Tamuz"],
+    [12, "Tamuz",   "Yud Beis Tamuz"],
+    [13, "Tamuz",   "Yud Gimmel Tamuz"],
+    [5,  "Av",      "Hey Av"],
+    [20, "Av",      "Chof Av"],
+  ];
+
+  // Minor holidays that show as a tag but do NOT override the day's topic
+  const MINOR_NO_OVERRIDE = new Set([
+    "Rosh Chodesh","Ta'anit Bechorot","Ta'anit Esther",
+    "Tzom Gedaliah","Tzom Tammuz","Tzom Tevet","Asara B'Tevet",
+    "Shabbat Shekalim","Shabbat Zachor","Shabbat Parah","Shabbat HaChodesh","Shabbat HaGadol",
+    "Shabbat Mevarchim","Isru Chag",
+    // Tu BiShvat and Lag BaOmer ARE topic overrides — intentionally NOT in this list
+  ]);
+
+  // Fetch standard holidays from Hebcal, filtering out modern/Israeli ones
+  try {
+    const url = `https://www.hebcal.com/hebcal?v=1&cfg=json&year=${y}&month=${m}&maj=on&min=on&mod=on&nx=on&mf=on&ss=on&s=on&i=off&geo=none`;
+    const res  = await fetch(url);
+    const data = await res.json();
+    const map  = {};
+    (data.items || []).forEach(item => {
+      if(item.category !== "holiday" && item.category !== "roshchodesh") return;
+      if(item.subcat === "modern") return;
+      const name = item.title_orig || item.title;
+      if(MODERN_FILTER.has(name)) return;
+      const date = item.date.slice(0,10);
+
+      // Determine if this holiday should become the day's topic
+      // Rosh Chodesh Kislev is special — it's a big Chabad day so it overrides
+      const isRoshChodeshKislev = item.category === "roshchodesh" && name.includes("Kislev");
+      const isMinor = item.category === "roshchodesh"
+        || MINOR_NO_OVERRIDE.has(name)
+        || MINOR_NO_OVERRIDE.has(name.replace(/ I$| II$| III$| IV$/, "").trim());
+      const topicOverride = isRoshChodeshKislev || !isMinor;
+
+      if(!map[date]) map[date] = { label: name, type: "holiday", topicOverride };
+    });
+    jewishHolidays = map;
+    console.log("[Hebcal] Holidays loaded:", Object.keys(jewishHolidays).length);
+  } catch(e){
+    console.error("[Hebcal] Holidays failed:", e);
+    jewishHolidays = {};
+  }
+
+  // Resolve Chabad dates for this Hebrew year via converter
+  // First get the Hebrew year for this Gregorian month
+  try {
+    const sample = `${y}-${String(m).padStart(2,"0")}-15`;
+    const sr = await fetch(`https://www.hebcal.com/converter?cfg=json&date=${sample}&g2h=1`);
+    const sd = await sr.json();
+    const hy = sd.hy; // Hebrew year for this month
+
+    // Fetch each Chabad date
+    const chabadFetches = CHABAD_DATES.map(([hd, hmonth, label]) =>
+      fetch(`https://www.hebcal.com/converter?cfg=json&hy=${hy}&hm=${hmonth}&hd=${hd}&h2g=1`)
+        .then(r => r.json())
+        .then(data => {
+          if(!data.gy) return; // invalid date
+          const dateStr = `${data.gy}-${String(data.gm).padStart(2,"0")}-${String(data.gd).padStart(2,"0")}`;
+          // Only add if in current month and not already a holiday
+          if(data.gm === m && data.gy === y){
+            if(!jewishHolidays[dateStr]){
+              jewishHolidays[dateStr] = { label, type: "chabad", topicOverride: true };
+            } else {
+              jewishHolidays[dateStr].label += ` · ${label}`;
+              jewishHolidays[dateStr].topicOverride = true; // chabad date always wins
+            }
+          }
+        })
+        .catch(() => {})
+    );
+    await Promise.all(chabadFetches);
+    console.log("[Chabad] Dates resolved. Total holidays:", Object.keys(jewishHolidays).length);
+  } catch(e){
+    console.error("[Chabad] Failed:", e);
+  }
+
+  // Fetch Hebrew date for every cell shown on the calendar grid
+  const dateMap = {};
+  const fetches = [];
+  for(const cd of calendarDays()){
+      const key = cd.toISOString().split("T")[0];
+      if(dateMap[key]) continue; // already queued
+      dateMap[key] = null;
+      fetches.push(
+        fetch(`https://www.hebcal.com/converter?cfg=json&date=${key}&g2h=1`)
+          .then(r => r.json())
+          .then(data => {
+            dateMap[key] = {
+              hd:   data.hd,
+              hm:   data.hm,
+              hy:   data.hy,
+              full: `${data.hd} ${data.hm} ${data.hy}`,
+            };
+          })
+          .catch(() => {})
+      );
+  }
+  await Promise.all(fetches);
+  hebrewDates = dateMap;
+}
+
+// ─────────────────────────────────────────────
+// SCHEDULE LOGIC
+// ─────────────────────────────────────────────
+
+// How many rows does this month's calendar need?
+// Returns array of Date objects for every cell shown on the calendar.
+// Starts on the Sunday on or before the 1st of viewDate's month,
+// ends on the Saturday on or after the last day of the month.
+function calendarDays(){
+  const y = viewDate.getFullYear(), m = viewDate.getMonth();
+  const firstOfMonth = new Date(y, m, 1);
+  const lastOfMonth  = new Date(y, m+1, 0);
+  // Walk back to Sunday
+  const start = new Date(firstOfMonth);
+  start.setDate(start.getDate() - start.getDay());
+  // Walk forward to Saturday
+  const end = new Date(lastOfMonth);
+  end.setDate(end.getDate() + (6 - end.getDay()));
+  const days = [];
+  const cur = new Date(start);
+  while(cur <= end){ days.push(new Date(cur)); cur.setDate(cur.getDate()+1); }
+  return days;
+}
+
+// Returns the slot index for a given date (for rotating item calculation).
+// Slot = count of non-Shabbos, non-fixed days from the very beginning of the month
+// up to (but not including) this date.
+function postingSlotForDate(date){
+  const y = viewDate.getFullYear(), m = viewDate.getMonth();
+  let slot = 0;
+  // Count from the 1st of the month to this date
+  const cur = new Date(y, m, 1);
+  while(cur < date){
+    const dow = cur.getDay();
+    if(dow !== 6 && !cfg.fixedRules.find(r => r.dayOfWeek === dow)) slot++;
+    cur.setDate(cur.getDate()+1);
+  }
+  return slot;
+}
+
+// What topic and type does this cell get?
+function cellMetaForDate(date){
+  const dow     = date.getDay();
+  const dateStr = date.toISOString().split("T")[0];
+
+  if(dow === 6){
+    const note = (cfg.shabbosNotes || {})[dateStr];
+    return { topic: note ? note.topic : "Shabbos", type:"shabbos", isPhoto:false, isShabbos:true, hasNote:!!note, note };
+  }
+
+  // Holiday / Chabad override
+  const holiday = jewishHolidays[dateStr];
+  if(holiday && holiday.topicOverride){
+    const isPhoto = photoCapableDays().includes(dow);
+    return { topic:holiday.label, type:holiday.type==="chabad"?"chabad":"holiday", isPhoto, isShabbos:false };
+  }
+
+  // Fixed rule
+  const fixed = cfg.fixedRules.find(r => r.dayOfWeek === dow);
+  if(fixed) return { topic:fixed.topic, type:"fixed", isPhoto:false, isShabbos:false };
+
+  // Rotating items — use slot based on actual date position in month
+  const slot      = postingSlotForDate(date);
+  const photoDays = photoCapableDays();
+  for(const item of cfg.rotatingItems){
+    const n = item.everyNDays || 7;
+    const offset = cfg.rotatingItems.indexOf(item);
+    if(slot % n === offset % n){
+      const isPhoto = photoDays.includes(dow);
+      return { topic:item.name, type:isPhoto?"photo":"rotating", isPhoto, isShabbos:false };
+    }
+  }
+
+  // Filler
+  const pool = cfg.fillerTopics;
+  return { topic: pool.length ? pool[slot % pool.length] : "—", type:"filler", isPhoto:false, isShabbos:false };
+}
+
+// Which tasks run today, with per-day overrides applied?
+function tasksForDay(meta, date){
+  const d = date.getDay();
+  const dateStr = date.toISOString().split('T')[0];
+  if(meta.isShabbos) return [];
+  const overrides = (cfg.dayOverrides || {})[dateStr] || {};
+  const removed   = new Set(overrides.removedTasks || []);
+
+  // Base tasks from platforms
+  let tasks = cfg.platforms
+    .filter(p => p.activeDays.length === 0 || p.activeDays.includes(d))
+    .map((p, i) => {
+      const isPhotoSwap = meta.isPhoto && !!p.photoContent;
+      const colorIdx    = (p.colorIdx !== undefined && p.colorIdx !== null) ? p.colorIdx : cfg.platforms.indexOf(p) % 7;
+      return {
+        id:         p.name, // used to identify for removal
+        label:      `${p.name} — ${isPhotoSwap ? p.photoContent : p.content}`,
+        isPhotoSwap,
+        mondayId:   p.mondayId ?? 0,
+        colorIdx,
+        mondayName: p.plainMonday ? (p.name === "JEM.tv" ? "JEM.tv Update" : "Content Email") : null,
+        isAdded:    false,
+      };
+    })
+    .filter(t => !removed.has(t.id));
+
+  // Add one-off tasks for this day
+  const added = overrides.addedTasks || [];
+  added.forEach((a, i) => {
+    tasks.push({
+      id:         `__added_${i}`,
+      label:      a.label,
+      isPhotoSwap:false,
+      mondayId:   0,
+      colorIdx:   a.colorIdx ?? 6,
+      mondayName: null,
+      isAdded:    true,
+    });
+  });
+
+  return tasks;
+}
+
+// ─────────────────────────────────────────────
+// INSPECTOR
+// ─────────────────────────────────────────────
+function inspect(d, w){ inspectDate(dateOfCell(w, d)); }
+function inspectDate(fd){
+  const d = fd.getDay();
+  selected = { d, dateStr: fd.toISOString().split("T")[0] };
+
+  document.querySelectorAll(".day-cell").forEach(c => c.classList.remove("sel"));
+  const cell = document.querySelector(`[data-date="${selected.dateStr}"]`);
+  if(cell) cell.classList.add("sel");
+
+  const meta = cellMetaForDate(fd);
+  const fmt  = fd.toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric",year:"numeric"});
+  const hdate = hebrewDates[selected.dateStr];
+  document.getElementById("insp-date").innerHTML =
+    `<span>${fmt.toUpperCase()}</span>${hdate ? `<span style="font-family:'DM Mono',monospace;font-size:0.58rem;color:var(--text-dim);margin-left:10px;letter-spacing:0.05em">${hdate.full.toUpperCase()}</span>` : ""}`;
+  document.getElementById("insp-topic").innerText = meta.topic;
+
+  const badge   = document.getElementById("insp-badge");
+  const taskSec = document.getElementById("insp-tasks");
+  const pushBtn = document.getElementById("btn-push");
+  const list    = document.getElementById("task-list");
+  list.innerHTML = "";
+
+  if(meta.isShabbos){
+    badge.style.display = "none";
+    taskSec.style.display = "block";
+    pushBtn.style.display = "none";
+    const weekBtn2 = document.getElementById("btn-push-week");
+    if(weekBtn2) weekBtn2.style.display = "none";
+    const ds = selected.dateStr;
+    list.innerHTML = `
+      <div class="shabbos-note">
+        ${note ? `<div style="font-family:'Playfair Display',serif;font-size:1rem;color:var(--text);margin-bottom:10px">${note.topic}</div>` : `<div style="font-family:'Playfair Display',serif;font-style:italic;color:var(--text-dim);margin-bottom:10px">Rest. No tasks scheduled.</div>`}
+        <div style="display:flex;gap:7px;margin-top:8px">
+          <input id="shabbos-note-input" class="finput" placeholder="Add a Shabbos note or topic..." value="${note ? note.topic : ""}" style="flex:1;font-size:0.78rem">
+          <button onclick="saveShabbosNote('${ds}')" style="padding:8px 12px;background:var(--primary);color:white;border:none;border-radius:var(--radius-sm);font-family:'Sora',sans-serif;font-size:0.74rem;font-weight:700;cursor:pointer">Save</button>
+          ${note ? `<button onclick="clearShabbosNote('${ds}')" style="padding:8px 12px;background:var(--surface2);color:var(--text-dim);border:1px solid var(--border2);border-radius:var(--radius-sm);font-family:'Sora',sans-serif;font-size:0.74rem;cursor:pointer">Clear</button>` : ""}
+        </div>
+      </div>
+    `;
+    return;
+  }
+
+  const badgeMap = {
+    fixed:    { cls:"badge-fixed",    text:"Fixed Rule"   },
+    rotating: { cls:"badge-rotating", text:"Rotating"     },
+    photo:    { cls:"badge-photo",    text:"Photo Day"    },
+    filler:   { cls:"badge-filler",   text:"Filler Topic" },
+    holiday:  { cls:"badge-holiday",  text:"Jewish Holiday"},
+    chabad:   { cls:"badge-chabad",   text:"Chabad Date"  },
+  };
+  const bm = badgeMap[meta.type] || badgeMap.filler;
+  badge.className    = `insp-badge ${bm.cls}`;
+  badge.innerText    = bm.text;
+  badge.style.display = "inline-block";
+  taskSec.style.display = "block";
+  pushBtn.style.display = "block";
+  const weekBtn = document.getElementById("btn-push-week");
+  if(weekBtn) weekBtn.style.display = "block";
+
+  // Topic — click to edit
+  const overrides   = (cfg.dayOverrides || {})[selected.dateStr] || {};
+  const topicVal    = overrides.topic || meta.topic;
+  document.getElementById("insp-topic").innerHTML = `
+    <span id="topic-display" style="cursor:pointer;border-bottom:1px dashed var(--border2);padding-bottom:2px" title="Click to edit" onclick="editTopic()">${topicVal}</span>
+  `;
+
+  // Tasks
+  tasksForDay(meta, fd).forEach((t, i) => {
+    const el = document.createElement("div");
+    el.className = "task-row";
+    el.style.animationDelay = `${i * 0.04}s`;
+    const [platName, contentLabel] = t.label.split(" — ");
+    el.innerHTML = `
+      <div class="task-dot dot-${t.colorIdx}"></div>
+      <span style="flex:1">${platName}${contentLabel ? ` <span style="color:var(--text-dim);font-weight:400">— ${contentLabel}</span>` : ""}</span>
+      <button onclick="removeTask('${selected.dateStr}','${t.id}')" title="Remove for this day only" style="background:none;border:none;cursor:pointer;color:var(--text-dim);font-size:0.9rem;padding:0 2px;line-height:1;transition:color .15s" onmouseover="this.style.color='var(--red)'" onmouseout="this.style.color='var(--text-dim)'">×</button>
+    `;
+    list.appendChild(el);
+  });
+
+  // Add task — collapsed by default, expands on click
+  const addRow = document.createElement("div");
+  addRow.style.cssText = "margin-top:8px";
+  const platformOptions = cfg.platforms.map((p,i) =>
+    `<option value="${i}">${p.name}</option>`
+  ).join("") + `<option value="custom">Custom...</option>`;
+  addRow.innerHTML = `
+    <button id="add-task-toggle" onclick="toggleAddTask()" style="background:none;border:1px dashed var(--border2);border-radius:var(--radius-sm);width:100%;padding:7px;font-family:'Sora',sans-serif;font-size:0.75rem;color:var(--text-dim);cursor:pointer;transition:all .15s" onmouseover="this.style.borderColor='var(--primary)';this.style.color='var(--primary)'" onmouseout="this.style.borderColor='var(--border2)';this.style.color='var(--text-dim)'">+ Add task</button>
+    <div id="add-task-fields" style="display:none;flex-direction:column;gap:6px;margin-top:8px">
+      <div style="display:flex;gap:7px">
+        <select id="add-task-platform" class="finput" style="flex:1;font-size:0.78rem" onchange="onAddPlatformChange()">
+          ${platformOptions}
+        </select>
+        <select id="add-task-content" class="finput" style="flex:1;font-size:0.78rem"></select>
+      </div>
+      <div id="add-task-custom" style="display:none">
+        <input id="add-task-custom-input" class="finput" placeholder="Custom task description..." style="font-size:0.78rem">
+      </div>
+      <div style="display:flex;gap:7px">
+        <button onclick="addTask('${selected.dateStr}')" style="flex:1;padding:8px;background:var(--primary);color:white;border:none;border-radius:var(--radius-sm);font-family:'Sora',sans-serif;font-size:0.74rem;font-weight:700;cursor:pointer">Add</button>
+        <button onclick="toggleAddTask()" style="padding:8px 12px;background:var(--surface2);border:1px solid var(--border2);border-radius:var(--radius-sm);font-family:'Sora',sans-serif;font-size:0.74rem;color:var(--text-dim);cursor:pointer">Cancel</button>
+      </div>
+    </div>
+  `;
+  list.appendChild(addRow);
+  onAddPlatformChange();
+
+  // Show override indicator if any overrides exist
+  if(overrides.topic || (overrides.removedTasks||[]).length || (overrides.addedTasks||[]).length){
+    const badge2 = document.createElement("div");
+    badge2.style.cssText = "margin-top:10px;font-family:'DM Mono',monospace;font-size:0.58rem;color:var(--text-dim);display:flex;align-items:center;gap:8px";
+    badge2.innerHTML = `<span style="color:var(--accent)">✦</span> Day has custom overrides — <button onclick="clearDayOverrides('${selected.dateStr}')" style="background:none;border:none;cursor:pointer;color:var(--red);font-family:'DM Mono',monospace;font-size:0.58rem;text-decoration:underline;padding:0">clear all</button>`;
+    list.appendChild(badge2);
+  }
+}
+
+function dateOfCell(w, d){
+  const s = new Date(viewDate.getFullYear(), viewDate.getMonth(), 1);
+  return new Date(viewDate.getFullYear(), viewDate.getMonth(), 1 + (w-1)*7 + (d - s.getDay()));
+}
+
+// ─────────────────────────────────────────────
+// MONDAY PUSH
+// ─────────────────────────────────────────────
+async function getHebrewDate(dateStr){
+  try {
+    const r = await fetch(`https://www.hebcal.com/converter?cfg=json&date=${dateStr}&g2h=1`);
+    const d = await r.json();
+    return `${d.hd} ${d.hm}`;
+  } catch { return null; }
+}
+
+async function mondayRequest(query){
+  const res = await fetch("https://api.monday.com/v2", {
+    method:  "post",
+    headers: { "Content-Type":"application/json", "Authorization":MONDAY_KEY, "API-Version":"2023-10" },
+    body:    JSON.stringify({ query }),
+  });
+  return res.json();
+}
+
+// Push a single date to Monday — returns list of created item IDs
+async function pushDateToMonday(dateStr){
+  const date     = new Date(dateStr);
+  const meta     = cellMetaForDate(date);
+  if(meta.isShabbos) return [];
+
+  const overrides = (cfg.dayOverrides || {})[dateStr] || {};
+  const topic     = overrides.topic || meta.topic;
+  const tasks     = tasksForDay(meta, date);
+  const heb       = hebrewDates[dateStr]
+    ? `${hebrewDates[dateStr].hd} ${hebrewDates[dateStr].hm}`
+    : await getHebrewDate(dateStr);
+
+  const createdIds = [];
+
+  for(const task of tasks){
+    const name = task.mondayName
+      ? task.mondayName
+      : heb ? `${topic} - ${heb}` : topic;
+
+    const cols = JSON.stringify({ [COL_DATE]:{ date:dateStr }, [COL_TYPE]:{ index:task.mondayId } });
+    const createQ = `mutation { create_item(board_id:${MONDAY_BOARD}, item_name:${JSON.stringify(name)}, column_values:${JSON.stringify(cols)}) { id } }`;
+
+    try {
+      const res  = await mondayRequest(createQ);
+      const itemId = res?.data?.create_item?.id;
+      if(itemId){
+        createdIds.push(itemId);
+        // Post a comment with topic and team tags
+        const commentBody = `Topic: ${topic}\\n\\n@mendelmarcus@gmail.com @Zgoldberg@jemedia.org`;
+        const commentQ = `mutation { create_update(item_id: ${itemId}, body: ${JSON.stringify(commentBody)}) { id } }`;
+        await mondayRequest(commentQ);
+      }
+    } catch(e){ console.error(e); }
+  }
+  return createdIds;
+}
+
+async function pushToMonday(){
+  const btn = document.getElementById("btn-push");
+  btn.disabled = true; btn.innerText = "Sending...";
+  try {
+    await pushDateToMonday(selected.dateStr);
+    btn.innerText = "Sync Complete";
+  } catch(e){
+    console.error(e);
+    btn.innerText = "Error — try again";
+  }
+  setTimeout(() => { btn.disabled=false; btn.innerText="Push to Monday.com"; }, 3000);
+}
+
+async function pushWeekToMonday(){
+  const btn = document.getElementById("btn-push-week");
+  btn.disabled = true; btn.innerText = "Pushing week...";
+
+  // Find Sunday of the selected date's week
+  const selDate  = new Date(selected.dateStr);
+  const sunday   = new Date(selDate);
+  sunday.setDate(selDate.getDate() - selDate.getDay()); // back to Sunday
+
+  const today    = new Date();
+  today.setHours(0,0,0,0);
+
+  // Push Sun–Fri of this week, but only today and future days
+  let pushed = 0;
+  for(let i = 0; i <= 5; i++){ // 0=Sun, 5=Fri
+    const d = new Date(sunday);
+    d.setDate(sunday.getDate() + i);
+    if(d < today) continue; // skip past days
+    const dateStr = d.toISOString().split("T")[0];
+    try {
+      const ids = await pushDateToMonday(dateStr);
+      pushed += ids.length;
+    } catch(e){ console.error(e); }
+  }
+
+  btn.innerText = `Done — ${pushed} items pushed`;
+  setTimeout(() => { btn.disabled=false; btn.innerText="Push remaining week"; }, 4000);
+}
+function buildCalendar(){
+  const now  = new Date();
+  const isCurrentMonth = viewDate.getFullYear()===now.getFullYear() && viewDate.getMonth()===now.getMonth();
+  document.getElementById("phase-info").innerText = viewDate.toLocaleString("default",{month:"long",year:"numeric"}).toUpperCase();
+
+  // Update nav buttons
+  const prevBtn = document.getElementById("nav-prev");
+  const nextBtn = document.getElementById("nav-next");
+  const todayBtn = document.getElementById("nav-today");
+  if(prevBtn) prevBtn.innerText = "‹";
+  if(nextBtn) nextBtn.innerText = "›";
+  if(todayBtn) todayBtn.style.opacity = isCurrentMonth ? "0.3" : "1";
+
+  const head = document.getElementById("cal-head");
+  const grid = document.getElementById("cal-grid");
+  head.innerHTML = ""; grid.innerHTML = "";
+  DAY_SHORT.forEach(d => head.innerHTML += `<div class="col-label">${d}</div>`);
+
+  for(const cd of calendarDays()){
+    const d       = cd.getDay();
+    const isCurrentMonthCell = cd.getMonth() === viewDate.getMonth();
+    const meta    = cellMetaForDate(cd);
+    const isToday = cd.toDateString() === now.toDateString();
+    const dateStr = cd.toISOString().split("T")[0];
+      const holidayObj = jewishHolidays[dateStr] || null;
+      const holidayLabel = holidayObj ? holidayObj.label : null;
+      const holidayType  = holidayObj ? holidayObj.type  : null;
+
+      const cell = document.createElement("div");
+      cell.className = [
+        "day-cell", `t-${meta.type}`,
+        isToday ? "today" : "",
+        meta.isShabbos ? "shabbos" : "",
+        meta.isShabbos && meta.hasNote ? "shabbos-noted" : "",
+        holidayObj ? "has-holiday" : "",
+        holidayType === "chabad" ? "has-chabad" : "",
+        !isCurrentMonthCell ? "overflow-cell" : "",
+      ].filter(Boolean).join(" ");
+      cell.dataset.date = dateStr;
+      cell.onclick = () => inspectDate(cd);
+      const hdate        = hebrewDates[dateStr];
+      const hdateDisplay = hdate ? `${hdate.hd} ${hdate.hm}` : "";
+      const hasOverride  = !!(cfg.dayOverrides && cfg.dayOverrides[dateStr] && (
+        cfg.dayOverrides[dateStr].topic ||
+        (cfg.dayOverrides[dateStr].removedTasks||[]).length ||
+        (cfg.dayOverrides[dateStr].addedTasks||[]).length
+      ));
+      const displayTopic = (cfg.dayOverrides?.[dateStr]?.topic) || meta.topic;
+
+      // Overflow cells (prev/next month spillover) show only the date number
+      if(!isCurrentMonthCell){
+        cell.innerHTML = `<span class="cell-date">${cd.getDate()}</span>`;
+      } else {
+        cell.innerHTML = `
+          <div class="cell-top-row">
+            <span class="cell-date">${cd.getDate()}</span>
+            ${hdateDisplay ? `<span class="cell-hdate">${hdateDisplay}</span>` : ""}
+          </div>
+          <span class="cell-topic">${displayTopic}</span>
+          ${holidayLabel ? `<span class="holiday-tag ${holidayType === "chabad" ? "holiday-tag-chabad" : ""}">${holidayLabel}</span>` : ""}
+          ${isToday ? '<span class="today-tag">TODAY</span>' : ""}
+          ${hasOverride ? '<span style="position:absolute;top:6px;right:6px;width:6px;height:6px;border-radius:50%;background:var(--accent)"></span>' : ""}
+        `;
+      }
+      grid.appendChild(cell);
+      if(isToday) selected = { d, dateStr };
+    }
+  // If no today found (different month), select first cell of the month
+  if(!isCurrentMonth){
+    const days = calendarDays();
+    const first = days.find(d => d.getMonth()===viewDate.getMonth());
+    if(first) selected = { d: first.getDay(), dateStr: first.toISOString().split("T")[0] };
+  }
+  inspectDate(new Date(selected.dateStr));
+}
+
+// ─────────────────────────────────────────────
+// DRAWER
+// ─────────────────────────────────────────────
+// ── PER-DAY OVERRIDES ──
+function getOverride(dateStr){
+  if(!cfg.dayOverrides) cfg.dayOverrides = {};
+  if(!cfg.dayOverrides[dateStr]) cfg.dayOverrides[dateStr] = {};
+  return cfg.dayOverrides[dateStr];
+}
+
+function editTopic(){
+  const display = document.getElementById("topic-display");
+  if(!display) return;
+  const cur = display.innerText;
+  display.outerHTML = `
+    <span style="display:flex;gap:6px;align-items:center">
+      <input id="topic-edit-input" class="finput" value="${cur}" style="font-size:1.2rem;font-family:'Playfair Display',serif;padding:4px 8px" onkeydown="if(event.key==='Enter')saveTopic('${selected.dateStr}')">
+      <button onclick="saveTopic('${selected.dateStr}')" style="padding:6px 11px;background:var(--primary);color:white;border:none;border-radius:var(--radius-sm);font-family:'Sora',sans-serif;font-size:0.74rem;font-weight:700;cursor:pointer;white-space:nowrap">Save</button>
+    </span>
+  `;
+  document.getElementById("topic-edit-input")?.focus();
+}
+
+async function saveTopic(dateStr){
+  const val = document.getElementById("topic-edit-input")?.value.trim();
+  if(!val) return;
+  const ov = getOverride(dateStr);
+  ov.topic = val;
+  await saveCfg(cfg);
+  inspectDate(new Date(selected.dateStr));
+  buildCalendar();
+}
+
+async function removeTask(dateStr, taskId){
+  const ov = getOverride(dateStr);
+  if(taskId.startsWith("__added_")){
+    // Remove from addedTasks by index
+    const idx = parseInt(taskId.replace("__added_",""));
+    (ov.addedTasks || []).splice(idx, 1);
+  } else {
+    if(!ov.removedTasks) ov.removedTasks = [];
+    if(!ov.removedTasks.includes(taskId)) ov.removedTasks.push(taskId);
+  }
+  await saveCfg(cfg);
+  inspectDate(new Date(selected.dateStr));
+}
+
+function toggleAddTask(){
+  const fields = document.getElementById("add-task-fields");
+  const toggle = document.getElementById("add-task-toggle");
+  if(!fields) return;
+  const opening = fields.style.display === "none";
+  fields.style.display = opening ? "flex" : "none";
+  if(toggle) toggle.style.display = opening ? "none" : "";
+  if(opening) onAddPlatformChange();
+}
+
+function onAddPlatformChange(){
+  const sel        = document.getElementById("add-task-platform");
+  const contentSel = document.getElementById("add-task-content");
+  const customDiv  = document.getElementById("add-task-custom");
+  if(!sel || !contentSel) return;
+  if(sel.value === "custom"){
+    contentSel.style.display = "none";
+    if(customDiv) customDiv.style.display = "block";
+    return;
+  }
+  if(customDiv) customDiv.style.display = "none";
+  contentSel.style.display = "";
+  const p = cfg.platforms[parseInt(sel.value)];
+  if(!p) return;
+  const opts = [`<option value="${p.content}">${p.content}</option>`];
+  if(p.photoContent && p.photoContent !== p.content)
+    opts.push(`<option value="${p.photoContent}">${p.photoContent}</option>`);
+  opts.push(`<option value="custom">Custom...</option>`);
+  contentSel.innerHTML = opts.join("");
+  contentSel.onchange = () => {
+    if(customDiv) customDiv.style.display = contentSel.value === "custom" ? "block" : "none";
+  };
+}
+
+async function addTask(dateStr){
+  const platSel    = document.getElementById("add-task-platform");
+  const contentSel = document.getElementById("add-task-content");
+  const customInp  = document.getElementById("add-task-custom-input");
+  let label, colorIdx = 6;
+  if(platSel.value === "custom"){
+    label = customInp?.value.trim();
+  } else {
+    const idx = parseInt(platSel.value);
+    const p   = cfg.platforms[idx];
+    const content = (contentSel?.value === "custom") ? (customInp?.value.trim() || p.content) : (contentSel?.value || p.content);
+    label    = `${p.name} — ${content}`;
+    colorIdx = p.colorIdx ?? idx % 7;
+  }
+  if(!label) return;
+  const ov = getOverride(dateStr);
+  if(!ov.addedTasks) ov.addedTasks = [];
+  ov.addedTasks.push({ label, colorIdx });
+  await saveCfg(cfg);
+  inspectDate(new Date(dateStr));
+}
+
+async function clearDayOverrides(dateStr){
+  if(!cfg.dayOverrides) return;
+  delete cfg.dayOverrides[dateStr];
+  await saveCfg(cfg);
+  inspectDate(new Date(selected.dateStr));
+  buildCalendar();
+}
+
+async function saveShabbosNote(dateStr){
+  const val = document.getElementById("shabbos-note-input")?.value.trim();
+  if(!val) return;
+  if(!cfg.shabbosNotes) cfg.shabbosNotes = {};
+  cfg.shabbosNotes[dateStr] = { topic: val };
+  try { await saveCfg(cfg); } catch(e){ alert("Save failed: " + e.message); return; }
+  buildCalendar();
+  // Re-select the Shabbos cell
+  const cell = document.querySelector(`[data-w="${selected.w}"][data-d="6"]`);
+  if(cell) inspectDate(new Date(selected.dateStr));
+}
+
+async function clearShabbosNote(dateStr){
+  if(!cfg.shabbosNotes) return;
+  delete cfg.shabbosNotes[dateStr];
+  try { await saveCfg(cfg); } catch(e){ alert("Save failed: " + e.message); return; }
+  buildCalendar();
+  inspectDate(new Date(selected.dateStr));
+}
+
+function openDrawer(){ renderTab(); document.getElementById("overlay").classList.add("open"); document.getElementById("drawer").classList.add("open"); }
+function closeDrawer(){ document.getElementById("overlay").classList.remove("open"); document.getElementById("drawer").classList.remove("open"); }
+
+async function changeMonth(delta){
+  viewDate = new Date(viewDate.getFullYear(), viewDate.getMonth() + delta, 1);
+  jewishHolidays = {}; hebrewDates = {};
+  await fetchHolidays();
+  buildCalendar();
+}
+
+async function goToToday(){
+  viewDate = new Date();
+  jewishHolidays = {}; hebrewDates = {};
+  await fetchHolidays();
+  buildCalendar();
+}
+function tab(name){
+  activeTab = name;
+  document.querySelectorAll(".dtab").forEach((t,i) => t.classList.toggle("on", ["fixed","rotating","filler","platforms"][i]===name));
+  renderTab();
+}
+function renderTab(){
+  const body = document.getElementById("drawer-body");
+  if(activeTab==="fixed")     renderFixed(body);
+  if(activeTab==="rotating")  renderRotating(body);
+  if(activeTab==="filler")    renderFiller(body);
+  if(activeTab==="platforms") renderPlatforms(body);
+}
+
+// ── Fixed Rules ──
+function renderFixed(body){
+  body.innerHTML = `
+    <div class="sec-title">Fixed Rules</div>
+    <div class="hint">A specific day of the week always gets this topic — overrides rotating items and filler.</div>
+    <div id="fixed-list" style="display:flex;flex-direction:column;gap:8px"></div>
+    <button class="btn-add" onclick="addFixed()">+ Add rule</button>
+  `;
+  drawFixed();
+}
+function drawFixed(){
+  const c = document.getElementById("fixed-list"); if(!c) return;
+  c.innerHTML = cfg.fixedRules.map((r,i) => `
+    <div class="card">
+      <div class="card-row">
+        <select class="finput" style="flex:0 0 130px" onchange="cfg.fixedRules[${i}].dayOfWeek=+this.value">
+          ${[0,1,2,3,4,5].map(d=>`<option value="${d}" ${r.dayOfWeek===d?"selected":""}>${DAY_NAMES[d]}</option>`).join("")}
+        </select>
+        <span style="font-size:0.72rem;color:var(--text-dim);white-space:nowrap;font-weight:600">is always</span>
+        <input class="finput" value="${r.topic}" placeholder="Topic" onchange="cfg.fixedRules[${i}].topic=this.value">
+        <button class="btn-del" onclick="cfg.fixedRules.splice(${i},1);drawFixed()">x</button>
+      </div>
+    </div>
+  `).join("") || `<div class="hint" style="text-align:center;padding:12px;border:1px dashed var(--border2);border-radius:8px">No fixed rules yet.</div>`;
+}
+function addFixed(){ cfg.fixedRules.push({dayOfWeek:0,topic:""}); drawFixed(); }
+
+// ── Rotating ──
+function renderRotating(body){
+  body.innerHTML = `
+    <div class="sec-title">Rotating Items</div>
+    <div class="hint">These cycle through available posting days in order. "Every N posting days" means N days where something is actually scheduled — Shabbos and fixed-rule days don't count. When a rotating item lands on a day with both WA and SM, it automatically becomes a photo day.</div>
+    <div id="rot-list" style="display:flex;flex-direction:column;gap:8px"></div>
+    <button class="btn-add" onclick="addRotating()">+ Add item</button>
+  `;
+  drawRotating();
+}
+function drawRotating(){
+  const c = document.getElementById("rot-list"); if(!c) return;
+  c.innerHTML = cfg.rotatingItems.map((item,i) => `
+    <div class="card">
+      <div class="card-row">
+        <input class="finput" value="${item.name}" placeholder="Item name" onchange="cfg.rotatingItems[${i}].name=this.value" style="flex:1;font-weight:600">
+        <button class="btn-del" onclick="cfg.rotatingItems.splice(${i},1);drawRotating()">x</button>
+      </div>
+      <div class="card-row">
+        <span style="font-size:0.72rem;color:var(--text-dim)">Every</span>
+        <input type="number" min="1" class="finput" style="width:60px;text-align:center" value="${item.everyNDays||7}" onchange="cfg.rotatingItems[${i}].everyNDays=+this.value||1">
+        <span style="font-size:0.72rem;color:var(--text-dim)">posting days</span>
+      </div>
+    </div>
+  `).join("") || `<div class="hint" style="text-align:center;padding:12px;border:1px dashed var(--border2);border-radius:8px">No rotating items yet.</div>`;
+}
+function addRotating(){ cfg.rotatingItems.push({name:"",everyNDays:7}); drawRotating(); }
+
+// ── Filler ──
+function renderFiller(body){
+  body.innerHTML = `
+    <div class="sec-title">Filler Topics</div>
+    <div class="hint">Fill any day not covered by a fixed rule or rotating item. Cycle through in order.</div>
+    <div class="tag-wrap" id="filler-tags" style="margin-top:10px"></div>
+    <div class="tag-add">
+      <input class="tag-input" id="filler-inp" placeholder="New topic..." onkeydown="if(event.key==='Enter')addFiller()">
+      <button class="btn-add-tag" onclick="addFiller()">+ Add</button>
+    </div>
+  `;
+  drawFiller();
+}
+function drawFiller(){
+  const c = document.getElementById("filler-tags"); if(!c) return;
+  c.innerHTML = cfg.fillerTopics.map((t,i) => `
+    <div class="tag">${t}<button class="tag-x" onclick="cfg.fillerTopics.splice(${i},1);drawFiller()">x</button></div>
+  `).join("");
+}
+function addFiller(){
+  const inp = document.getElementById("filler-inp"), v = inp.value.trim();
+  if(v && !cfg.fillerTopics.includes(v)){ cfg.fillerTopics.push(v); drawFiller(); }
+  inp.value = "";
+}
+
+// ── Platforms ──
+function renderPlatforms(body){
+  body.innerHTML = `
+    <div class="sec-title">Platforms</div>
+    <div class="hint">Each platform posts every day by default. Select specific days to restrict it. Photo days are automatic — any platform with a "photo day" label set will switch to that content when the day qualifies.</div>
+    <div id="plat-list" style="display:flex;flex-direction:column;gap:10px;margin-top:4px"></div>
+    <button class="btn-add" onclick="addPlatform()">+ Add platform</button>
+  `;
+  drawPlatforms();
+}
+function drawPlatforms(){
+  const c = document.getElementById("plat-list"); if(!c) return;
+  c.innerHTML = cfg.platforms.map((p,i) => {
+    const days = p.activeDays || [];
+    const chips = DAY_CHIPS.map((lbl,d) =>
+      `<div class="day-chip ${days.includes(d)?"on":""}" onclick="toggleDay(${i},${d})">${lbl}</div>`
+    ).join("");
+    return `
+      <div class="card">
+        <div class="card-row">
+          <input class="finput" value="${p.name}" placeholder="Platform name" onchange="cfg.platforms[${i}].name=this.value" style="flex:1;font-weight:600">
+          <input type="number" min="0" class="finput" style="width:52px;text-align:center" title="Monday.com type ID" value="${p.mondayId??0}" onchange="cfg.platforms[${i}].mondayId=+this.value||0">
+          <button class="btn-del" onclick="cfg.platforms.splice(${i},1);drawPlatforms()">x</button>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          <div>
+            <div class="sublabel">Normal days</div>
+            <input class="finput" value="${p.content||""}" placeholder="e.g. Daily Video" onchange="cfg.platforms[${i}].content=this.value">
+          </div>
+          <div>
+            <div class="sublabel">Photo days</div>
+            <input class="finput" value="${p.photoContent||""}" placeholder="Leave blank if N/A" onchange="cfg.platforms[${i}].photoContent=this.value||null">
+          </div>
+        </div>
+        <div>
+          <div class="sublabel" style="margin-bottom:6px">Active days <span style="text-transform:none;letter-spacing:0;font-size:0.65rem">(none selected = every day)</span></div>
+          <div class="day-chips">${chips}</div>
+        </div>
+      </div>
+    `;
+  }).join("");
+}
+function toggleDay(pi, d){
+  const days = cfg.platforms[pi].activeDays || [];
+  const idx  = days.indexOf(d);
+  if(idx === -1) days.push(d); else days.splice(idx,1);
+  cfg.platforms[pi].activeDays = days;
+  drawPlatforms();
+}
+function addPlatform(){ cfg.platforms.push({name:"",content:"",photoContent:null,activeDays:[],mondayId:0,plainMonday:false,colorIdx:6}); drawPlatforms(); }
+
+// ── FIREBASE ──
+firebase.initializeApp({
+  apiKey:            "AIzaSyCDVS0UfMM3qBf2mP3zGfRoOiCYA4XwtKk",
+  authDomain:        "jem-cadence.firebaseapp.com",
+  projectId:         "jem-cadence",
+  storageBucket:     "jem-cadence.firebasestorage.app",
+  messagingSenderId: "740314160325",
+  appId:             "1:740314160325:web:dc2e6e98047563a81764ac",
+});
+const db     = firebase.firestore();
+const CFGDOC = db.collection("schedule").doc("config");
+
+function setStatus(msg, isError){
+  const el = document.getElementById("sync-status");
+  if(!el) return;
+  el.innerText = msg;
+  el.style.color = isError ? "var(--red)" : "var(--text-dim)";
+}
+
+async function loadCfg(){
+  setStatus("Loading...", false);
+  try {
+    const snap = await CFGDOC.get();
+    setStatus("", false);
+    return (snap.exists && snap.data().value) ? snap.data().value : clone(DEFAULTS);
+  } catch(e){
+    setStatus("Offline — using defaults", true);
+    return clone(DEFAULTS);
+  }
+}
+
+async function saveCfg(data){
+  await CFGDOC.set({ value: data });
+}
+
+// ── SAVE / RESET / UNDO ──
+let undoCfg = null;
+
+async function saveAndClose(){
+  if(!confirm("This will update the calendar for everyone.\n\nSave changes?")) return;
+  const btn = document.querySelector(".btn-save");
+  btn.innerText = "Saving..."; btn.disabled = true;
+  undoCfg = clone(cfg);
+  try {
+    await saveCfg(cfg);
+    closeDrawer(); buildCalendar(); showUndo();
+  } catch(e){
+    alert("Save failed: " + e.message);
+  } finally {
+    btn.innerText = "Save & Rebuild"; btn.disabled = false;
+  }
+}
+
+async function resetDefaults(){
+  if(!confirm("Reset everything to defaults? This updates the calendar for everyone.")) return;
+  undoCfg = clone(cfg);
+  cfg = clone(DEFAULTS);
+  try { await saveCfg(cfg); } catch(e){ alert("Reset failed: " + e.message); cfg = clone(undoCfg); return; }
+  closeDrawer(); buildCalendar(); showUndo();
+}
+
+function showUndo(){
+  const btn = document.getElementById("undo-btn");
+  if(!btn) return;
+  btn.style.display = "inline-flex";
+  clearTimeout(btn._t);
+  btn._t = setTimeout(() => { btn.style.display = "none"; undoCfg = null; }, 30000);
+}
+
+async function undoSave(){
+  if(!undoCfg) return;
+  if(!confirm("Undo the last save? This reverts the calendar for everyone.")) return;
+  cfg = clone(undoCfg); undoCfg = null;
+  document.getElementById("undo-btn").style.display = "none";
+  try { await saveCfg(cfg); } catch(e){ alert("Undo failed: " + e.message); return; }
+  buildCalendar();
+}
+
+// ── INIT ──
+(async () => {
+  console.log("[Init] Starting...");
+  [cfg] = await Promise.all([loadCfg(), fetchHolidays()]);
+  console.log("[Init] cfg loaded:", cfg ? "OK" : "FAILED");
+  console.log("[Init] hebrewDates count:", Object.keys(hebrewDates).length);
+  console.log("[Init] jewishHolidays count:", Object.keys(jewishHolidays).length);
+  buildCalendar();
+  console.log("[Init] Calendar built.");
+})();
+</script>
+</body>
+</html><!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>JEM Cadence</title>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=DM+Mono:wght@400;500&family=Sora:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+<style>
+:root {
+  --bg:#f5f2ee; --surface:#fff; --surface2:#faf8f5;
+  --border:#e8e2d9; --border2:#d4ccbf;
+  --primary:#1a56db; --primary-light:#ebf0fd;
+  --accent:#c8781a; --accent-light:#fdf3e7;
+  --green:#157a4a;
+  --red:#c0392b; --red-light:#fdf0ee;
+  --purple:#6d28d9; --purple-light:#f0ebff;
+  --text:#1a1612; --text-mid:#6b6155; --text-dim:#a09285;
+  --radius:14px; --radius-sm:8px;
+  --shadow:0 2px 8px rgba(0,0,0,0.07),0 1px 2px rgba(0,0,0,0.04);
+  --shadow-lg:0 8px 32px rgba(0,0,0,0.12),0 2px 8px rgba(0,0,0,0.06);
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+body{background:var(--bg);color:var(--text);font-family:'Sora',sans-serif;min-height:100vh;}
+.wrap{max-width:1480px;margin:0 auto;padding:28px 32px;}
+
+header{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px;padding-bottom:20px;border-bottom:1px solid var(--border);}
+.brand{display:flex;align-items:baseline;gap:12px;}
+.logo{font-family:'Playfair Display',serif;font-size:1.55rem;}
+.logo em{color:var(--primary);font-style:normal;}
+.logo-tag{font-family:'DM Mono',monospace;font-size:0.58rem;color:var(--text-dim);letter-spacing:0.18em;text-transform:uppercase;border:1px solid var(--border2);border-radius:4px;padding:3px 8px;}
+.btn-edit{background:var(--surface);border:1px solid var(--border2);border-radius:var(--radius-sm);padding:8px 14px;font-family:'Sora',sans-serif;font-size:0.75rem;font-weight:600;color:var(--text-mid);cursor:pointer;transition:all .18s;box-shadow:var(--shadow);}
+.btn-edit:hover{border-color:var(--primary);color:var(--primary);background:var(--primary-light);}
+
+.dashboard{display:grid;grid-template-columns:320px 1fr;gap:20px;align-items:start;}
+
+/* INSPECTOR */
+.inspector{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:26px;box-shadow:var(--shadow);position:sticky;top:28px;}
+.insp-date{font-family:'DM Mono',monospace;font-size:0.6rem;letter-spacing:0.18em;color:var(--text-dim);text-transform:uppercase;margin-bottom:10px;display:flex;align-items:center;gap:8px;}
+.insp-date::after{content:'';flex:1;height:1px;background:var(--border);}
+.insp-topic{font-family:'Playfair Display',serif;font-size:1.85rem;line-height:1.2;color:var(--text);margin-bottom:8px;min-height:2.4rem;}
+.insp-badge{display:inline-block;font-family:'DM Mono',monospace;font-size:0.55rem;letter-spacing:0.1em;text-transform:uppercase;padding:3px 9px;border-radius:20px;margin-bottom:18px;}
+.badge-fixed   {background:var(--accent-light);color:var(--accent);border:1px solid rgba(200,120,26,0.2);}
+.badge-rotating{background:var(--purple-light);color:var(--purple);border:1px solid rgba(109,40,217,0.2);}
+.badge-photo   {background:var(--red-light);color:var(--red);border:1px solid rgba(192,57,43,0.2);}
+.badge-filler  {background:var(--surface2);color:var(--text-dim);border:1px solid var(--border2);}
+.badge-holiday {background:#ebf3ff;color:#1a56db;border:1px solid rgba(26,86,219,0.2);}
+.badge-chabad  {background:#fdf4ff;color:#7e22ce;border:1px solid rgba(126,34,206,0.2);}
+.insp-section-label{font-family:'DM Mono',monospace;font-size:0.55rem;letter-spacing:0.18em;color:var(--text-dim);text-transform:uppercase;margin-bottom:7px;}
+.task-list{display:flex;flex-direction:column;gap:5px;}
+.task-row{display:flex;align-items:center;gap:10px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 13px;font-size:0.8rem;font-weight:500;color:var(--text-mid);transition:all .15s;animation:fadeUp .18s ease both;}
+.task-row:hover{border-color:var(--primary);color:var(--text);background:var(--primary-light);}
+.task-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;}
+.shabbos-note{font-family:'Playfair Display',serif;font-style:italic;color:var(--text-dim);font-size:0.95rem;padding:22px;text-align:center;border:1px dashed var(--border2);border-radius:var(--radius-sm);}
+.btn-push{width:100%;margin-top:18px;padding:13px;background:var(--green);color:white;border:none;border-radius:var(--radius-sm);font-family:'Sora',sans-serif;font-size:0.78rem;font-weight:700;letter-spacing:0.06em;cursor:pointer;transition:all .2s;box-shadow:0 2px 8px rgba(21,122,74,0.2);}
+.btn-push:hover{background:#0f6038;transform:translateY(-1px);}
+.btn-push:disabled{background:#ccc;color:#888;box-shadow:none;cursor:not-allowed;transform:none;}
+.conn-line{display:flex;align-items:center;gap:7px;margin-top:13px;font-family:'DM Mono',monospace;font-size:0.58rem;color:var(--text-dim);}
+.conn-dot{width:6px;height:6px;border-radius:50%;background:var(--green);animation:pulse 2.5s ease-in-out infinite;}
+
+/* CALENDAR */
+.cal-panel{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:24px;box-shadow:var(--shadow);}
+.legend{display:flex;gap:16px;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border);flex-wrap:wrap;}
+.leg-item{display:flex;align-items:center;gap:6px;font-family:'DM Mono',monospace;font-size:0.57rem;letter-spacing:0.06em;color:var(--text-dim);text-transform:uppercase;}
+.leg-pip{width:8px;height:8px;border-radius:2px;}
+.cal-head,.cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:7px;}
+.cal-head{margin-bottom:7px;}
+.col-label{font-family:'DM Mono',monospace;font-size:0.6rem;letter-spacing:0.12em;color:var(--text-dim);text-align:center;padding:5px 0;}
+.day-cell{background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:10px 9px;min-height:90px;cursor:pointer;transition:all .15s;display:flex;flex-direction:column;gap:4px;}
+.day-cell:not(.shabbos):hover{transform:translateY(-2px);box-shadow:var(--shadow);}
+.day-cell.t-fixed   {border-left:3px solid rgba(200,120,26,0.4);}
+.day-cell.t-rotating{border-left:3px solid rgba(109,40,217,0.3);}
+.day-cell.t-photo   {border-left:3px solid rgba(192,57,43,0.35);}
+.day-cell.t-filler  {border-left:3px solid rgba(26,86,219,0.2);}
+.day-cell.t-holiday {border-left:3px solid rgba(26,86,219,0.5);}
+.day-cell.t-chabad  {border-left:3px solid rgba(126,34,206,0.5);}
+.day-cell.t-fixed:hover   {border-color:var(--accent);background:var(--accent-light);}
+.day-cell.t-rotating:hover{border-color:var(--purple);background:var(--purple-light);}
+.day-cell.t-photo:hover   {border-color:var(--red);background:var(--red-light);}
+.day-cell.t-filler:hover  {border-color:var(--primary);background:var(--primary-light);}
+.day-cell.t-holiday:hover {border-color:#1a56db;background:#ebf3ff;}
+.day-cell.t-chabad:hover  {border-color:#7e22ce;background:#fdf4ff;}
+.day-cell.sel.t-fixed   {background:var(--accent-light);border-color:var(--accent);border-width:1.5px;}
+.day-cell.sel.t-rotating{background:var(--purple-light);border-color:var(--purple);border-width:1.5px;}
+.day-cell.sel.t-photo   {background:var(--red-light);border-color:var(--red);border-width:1.5px;}
+.day-cell.sel.t-filler  {background:var(--primary-light);border-color:var(--primary);border-width:1.5px;}
+.day-cell.sel.t-holiday {background:#ebf3ff;border-color:#1a56db;border-width:1.5px;}
+.day-cell.sel.t-chabad  {background:#fdf4ff;border-color:#7e22ce;border-width:1.5px;}
+.day-cell.today{box-shadow:0 0 0 2px var(--accent);}
+.day-cell.shabbos{background:#fafaf8;border-style:dashed;cursor:pointer;opacity:0.6;}
+.day-cell.shabbos:hover{transform:translateY(-1px);box-shadow:var(--shadow);opacity:0.8;}
+.day-cell.shabbos-noted{opacity:0.85;border-style:solid;border-color:var(--border2);}
+.day-cell.overflow-cell{opacity:0.35;pointer-events:none;}
+.cell-date{font-family:'DM Mono',monospace;font-size:0.62rem;color:var(--text-dim);}
+.day-cell.today .cell-date{color:var(--accent);font-weight:700;}
+.cell-topic{font-size:0.68rem;font-weight:600;color:var(--text-mid);line-height:1.3;}
+.today-tag{font-family:'DM Mono',monospace;font-size:0.48rem;padding:2px 6px;border-radius:4px;margin-top:auto;background:var(--accent-light);color:var(--accent);border:1px solid rgba(200,120,26,0.2);display:inline-block;}
+.holiday-tag{font-family:'DM Mono',monospace;font-size:0.46rem;padding:2px 5px;border-radius:4px;background:#f0f7ff;color:#1a56db;border:1px solid rgba(26,86,219,0.2);display:inline-block;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;}
+.holiday-tag-chabad{background:#fdf4ff;color:#7e22ce;border-color:rgba(126,34,206,0.2);}
+.day-cell.has-holiday{border-top:2px solid rgba(26,86,219,0.4);}
+.day-cell.has-chabad{border-top:2px solid rgba(126,34,206,0.4);}
+.cell-hdate{font-family:'DM Mono',monospace;font-size:0.56rem;color:var(--text-dim);text-align:right;}
+.cell-top-row{display:flex;justify-content:space-between;align-items:flex-start;}
+
+/* platform color dots */
+.dot-0{background:#25d366;}
+.dot-1{background:#e1306c;}
+.dot-2{background:#1da1f2;}
+.dot-3{background:#a25ddc;}
+.dot-4{background:#f59e0b;}
+.dot-5{background:#ff0000;}
+.dot-6{background:#6b7280;}
+/* platform color pills in inspector */
+.pill-0{background:#d4f7e4;color:#157a4a;border:1px solid rgba(21,122,74,0.2);}
+.pill-1{background:#fce4ef;color:#b5154f;border:1px solid rgba(181,21,79,0.2);}
+.pill-2{background:#ddf1fd;color:#0c6ea8;border:1px solid rgba(12,110,168,0.2);}
+.pill-3{background:#f0ebff;color:#6d28d9;border:1px solid rgba(109,40,217,0.2);}
+.pill-4{background:#fef3c7;color:#92400e;border:1px solid rgba(146,64,14,0.2);}
+.pill-5{background:#fee2e2;color:#991b1b;border:1px solid rgba(153,27,27,0.2);}
+.pill-6{background:#f3f4f6;color:#374151;border:1px solid rgba(55,65,81,0.2);}
+.task-pill{display:inline-block;font-size:0.7rem;font-weight:600;padding:2px 9px;border-radius:20px;margin-left:auto;flex-shrink:0;}
+
+/* DRAWER */
+.overlay{position:fixed;inset:0;background:rgba(26,22,18,0.4);z-index:100;opacity:0;pointer-events:none;transition:opacity .25s;backdrop-filter:blur(3px);}
+.overlay.open{opacity:1;pointer-events:all;}
+.drawer{position:fixed;top:0;right:0;bottom:0;width:540px;background:var(--surface);border-left:1px solid var(--border);z-index:101;transform:translateX(100%);transition:transform .3s cubic-bezier(0.4,0,0.2,1);display:flex;flex-direction:column;box-shadow:var(--shadow-lg);}
+.drawer.open{transform:translateX(0);}
+.drawer-head{display:flex;justify-content:space-between;align-items:center;padding:20px 26px;border-bottom:1px solid var(--border);background:var(--surface2);flex-shrink:0;}
+.drawer-head-title{font-family:'Playfair Display',serif;font-size:1.2rem;}
+.btn-close{background:none;border:1px solid var(--border2);border-radius:6px;width:32px;height:32px;cursor:pointer;color:var(--text-mid);display:flex;align-items:center;justify-content:center;transition:all .15s;}
+.btn-close:hover{background:var(--red-light);border-color:var(--red);color:var(--red);}
+.drawer-tabs{display:flex;border-bottom:1px solid var(--border);background:var(--surface2);flex-shrink:0;}
+.dtab{flex:1;padding:11px 4px;text-align:center;font-size:0.69rem;font-weight:600;color:var(--text-dim);cursor:pointer;border-bottom:2px solid transparent;transition:all .15s;background:none;border-top:none;border-left:none;border-right:none;font-family:'Sora',sans-serif;}
+.dtab:hover{color:var(--text-mid);}
+.dtab.on{color:var(--primary);border-bottom-color:var(--primary);background:white;}
+.drawer-body{flex:1;overflow-y:auto;padding:22px 26px;display:flex;flex-direction:column;gap:18px;}
+.drawer-foot{padding:16px 26px;border-top:1px solid var(--border);background:var(--surface2);display:flex;gap:10px;flex-shrink:0;}
+
+/* form */
+.sec-title{font-family:'DM Mono',monospace;font-size:0.58rem;letter-spacing:0.2em;color:var(--text-dim);text-transform:uppercase;padding-bottom:10px;border-bottom:1px solid var(--border);}
+.hint{font-size:0.7rem;color:var(--text-dim);line-height:1.6;}
+.finput{width:100%;padding:8px 11px;border:1px solid var(--border2);border-radius:var(--radius-sm);font-family:'Sora',sans-serif;font-size:0.79rem;color:var(--text);background:var(--surface2);outline:none;transition:border-color .15s;}
+.finput:focus{border-color:var(--primary);background:var(--primary-light);}
+select.finput{cursor:pointer;}
+.card{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:13px 15px;display:flex;flex-direction:column;gap:9px;}
+.card-row{display:flex;align-items:center;gap:8px;}
+.sublabel{font-family:'DM Mono',monospace;font-size:0.55rem;letter-spacing:0.1em;color:var(--text-dim);text-transform:uppercase;margin-bottom:4px;}
+.btn-del{width:28px;height:28px;border-radius:6px;border:1px solid var(--border2);background:var(--surface);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:0.8rem;color:var(--text-dim);transition:all .15s;flex-shrink:0;}
+.btn-del:hover{background:var(--red-light);border-color:var(--red);color:var(--red);}
+.btn-add{padding:8px 14px;background:var(--primary-light);border:1px solid rgba(26,86,219,0.3);border-radius:var(--radius-sm);color:var(--primary);font-size:0.74rem;font-weight:700;cursor:pointer;transition:all .15s;font-family:'Sora',sans-serif;}
+.btn-add:hover{background:var(--primary);color:white;}
+
+/* day chips */
+.day-chips{display:flex;gap:5px;flex-wrap:wrap;}
+.day-chip{padding:5px 9px;font-size:0.65rem;font-weight:700;border-radius:5px;cursor:pointer;font-family:'DM Mono',monospace;letter-spacing:0.05em;border:1px solid var(--border2);background:var(--surface);color:var(--text-dim);transition:all .15s;user-select:none;}
+.day-chip.on{background:var(--primary);border-color:var(--primary);color:white;}
+
+/* tags */
+.tag-wrap{display:flex;flex-wrap:wrap;gap:7px;}
+.tag{display:flex;align-items:center;gap:6px;background:white;border:1px solid var(--border2);border-radius:20px;padding:5px 10px 5px 13px;font-size:0.75rem;font-weight:500;color:var(--text-mid);}
+.tag-x{background:none;border:none;cursor:pointer;color:var(--text-dim);font-size:0.9rem;line-height:1;padding:0;transition:color .15s;}
+.tag-x:hover{color:var(--red);}
+.tag-add{display:flex;gap:8px;margin-top:4px;}
+.tag-input{flex:1;padding:8px 11px;border:1px solid var(--border2);border-radius:var(--radius-sm);font-family:'Sora',sans-serif;font-size:0.78rem;color:var(--text);background:var(--surface2);outline:none;}
+.tag-input:focus{border-color:var(--primary);}
+.btn-add-tag{padding:8px 14px;background:var(--primary-light);border:1px solid rgba(26,86,219,0.3);border-radius:var(--radius-sm);color:var(--primary);font-size:0.75rem;font-weight:700;cursor:pointer;transition:all .15s;}
+.btn-add-tag:hover{background:var(--primary);color:white;}
+
+.btn-save{flex:1;padding:12px;background:var(--primary);color:white;border:none;border-radius:var(--radius-sm);font-family:'Sora',sans-serif;font-size:0.8rem;font-weight:700;cursor:pointer;transition:all .18s;}
+.btn-save:hover{background:#1347bf;}
+.btn-reset{padding:12px 16px;background:var(--surface);border:1px solid var(--border2);border-radius:var(--radius-sm);font-family:'Sora',sans-serif;font-size:0.78rem;font-weight:600;color:var(--text-mid);cursor:pointer;transition:all .15s;}
+.btn-reset:hover{border-color:var(--red);color:var(--red);background:var(--red-light);}
+
+.drawer-body::-webkit-scrollbar{width:4px;}
+.drawer-body::-webkit-scrollbar-thumb{background:var(--border2);border-radius:3px;}
+@keyframes fadeUp{from{opacity:0;transform:translateY(5px);}to{opacity:1;transform:translateY(0);}}
+@keyframes pulse{0%,100%{opacity:1;}50%{opacity:0.35;}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand">
+      <div class="logo">JEM <em>Cadence</em></div>
+      <div class="logo-tag">Automation Suite</div>
+    </div>
+    <div style="display:flex;align-items:center;gap:14px">
+      <span id="sync-status" style="font-family:'DM Mono',monospace;font-size:0.6rem;letter-spacing:0.1em"></span>
+      <button id="undo-btn" onclick="undoSave()" style="display:none;align-items:center;gap:6px;background:var(--accent-light);border:1px solid var(--accent);border-radius:var(--radius-sm);padding:7px 13px;font-family:'Sora',sans-serif;font-size:0.72rem;font-weight:600;color:var(--accent);cursor:pointer">Undo last save</button>
+      <div style="display:flex;align-items:center;gap:6px">
+        <button id="nav-prev" onclick="changeMonth(-1)" style="width:30px;height:30px;border:1px solid var(--border2);border-radius:var(--radius-sm);background:var(--surface);cursor:pointer;font-size:1rem;color:var(--text-mid);transition:all .15s;display:flex;align-items:center;justify-content:center;" onmouseover="this.style.borderColor='var(--primary)';this.style.color='var(--primary)'" onmouseout="this.style.borderColor='var(--border2)';this.style.color='var(--text-mid)'">&#8249;</button>
+        <span id="phase-info" style="font-family:'DM Mono',monospace;font-size:0.62rem;color:var(--text-dim);letter-spacing:0.15em;text-transform:uppercase;min-width:140px;text-align:center"></span>
+        <button id="nav-next" onclick="changeMonth(1)" style="width:30px;height:30px;border:1px solid var(--border2);border-radius:var(--radius-sm);background:var(--surface);cursor:pointer;font-size:1rem;color:var(--text-mid);transition:all .15s;display:flex;align-items:center;justify-content:center;" onmouseover="this.style.borderColor='var(--primary)';this.style.color='var(--primary)'" onmouseout="this.style.borderColor='var(--border2)';this.style.color='var(--text-mid)'">&#8250;</button>
+        <button id="nav-today" onclick="goToToday()" style="padding:6px 11px;border:1px solid var(--border2);border-radius:var(--radius-sm);background:var(--surface);cursor:pointer;font-family:'Sora',sans-serif;font-size:0.7rem;font-weight:600;color:var(--text-mid);transition:all .15s;" onmouseover="this.style.borderColor='var(--primary)';this.style.color='var(--primary)'" onmouseout="this.style.borderColor='var(--border2)';this.style.color='var(--text-mid)'">Today</button>
+      </div>
+      <button class="btn-edit" onclick="openDrawer()">Edit Schedule</button>
+    </div>
+  </header>
+
+  <div class="dashboard">
+    <section class="inspector">
+      <div class="insp-date" id="insp-date">Select a date</div>
+      <div class="insp-topic" id="insp-topic">—</div>
+      <div id="insp-badge" class="insp-badge" style="display:none"></div>
+      <div id="insp-tasks" style="display:none">
+        <div class="insp-section-label">Tasks for this day</div>
+        <div class="task-list" id="task-list"></div>
+      </div>
+      <button class="btn-push" id="btn-push" onclick="pushToMonday()" style="display:none">Push to Monday.com</button>
       <div class="conn-line"><div class="conn-dot"></div><span>Board connected</span></div>
     </section>
 
