@@ -693,7 +693,12 @@ function inspectDate(fd){
   taskSec.style.display = "block";
   pushBtn.style.display = "block";
   const weekBtn = document.getElementById("btn-push-week");
-  if(weekBtn) weekBtn.style.display = "block";
+  if(weekBtn){
+    weekBtn.style.display = "block";
+    const today = new Date(); today.setHours(0,0,0,0);
+    const isFuture = new Date(selected.dateStr) > today;
+    weekBtn.innerText = isFuture ? "Push full week" : "Push remaining week";
+  }
 
   // Topic — click to edit
   const overrides   = (cfg.dayOverrides || {})[selected.dateStr] || {};
@@ -761,8 +766,11 @@ function dateOfCell(w, d){
 // MONDAY PUSH
 // ─────────────────────────────────────────────
 async function getHebrewDate(dateStr){
-  // Use cached map first — avoids extra API calls
-  if(hebrewDates[dateStr]) return `${hebrewDates[dateStr].hd} ${hebrewDates[dateStr].hm}`;
+  // Use cached map if available (covers currently viewed month)
+  if(hebrewDates[dateStr]){
+    return `${hebrewDates[dateStr].hd} ${hebrewDates[dateStr].hm}`;
+  }
+  // Fall back to single API call for dates outside the cache (e.g. pushing future months)
   try {
     const r = await fetch(`https://www.hebcal.com/converter?cfg=json&date=${dateStr}&g2h=1`);
     const d = await r.json();
@@ -854,20 +862,20 @@ async function pushWeekToMonday(){
   const btn = document.getElementById("btn-push-week");
   btn.disabled = true; btn.innerText = "Pushing week...";
 
-  // Find Sunday of the selected date's week
-  const selDate  = new Date(selected.dateStr);
-  const sunday   = new Date(selDate);
-  sunday.setDate(selDate.getDate() - selDate.getDay()); // back to Sunday
+  const selDate = new Date(selected.dateStr);
+  const sunday  = new Date(selDate);
+  sunday.setDate(selDate.getDate() - selDate.getDay());
 
-  const today    = new Date();
+  const today = new Date();
   today.setHours(0,0,0,0);
+  const isFutureMonth = selDate > today;
 
-  // Push Sun–Fri of this week, but only today and future days
   let pushed = 0;
-  for(let i = 0; i <= 5; i++){ // 0=Sun, 5=Fri
+  for(let i = 0; i <= 5; i++){
     const d = new Date(sunday);
     d.setDate(sunday.getDate() + i);
-    if(d < today) continue; // skip past days
+    // For future months push everything; for current/past month skip past days
+    if(!isFutureMonth && d < today) continue;
     const dateStr = d.toISOString().split("T")[0];
     try {
       const ids = await pushDateToMonday(dateStr);
