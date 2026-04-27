@@ -1274,9 +1274,12 @@ async function saveCfg(data){
 //   match /changeLog/{doc} { allow read, write: if true; }
 // ─────────────────────────────────────────────
 const TEAM = ["Mendel", "Zalmen", "Yisroel", "Yosef"];
-let pendingSaveAction = null; // holds the save callback until author is chosen
+let pendingSaveAction = null;
+let pendingPrevCfg   = null; // snapshot taken BEFORE any mutation
 
 function promptAuthorThenSave(action){
+  // Snapshot cfg RIGHT NOW before any mutations happen
+  pendingPrevCfg   = clone(cfg);
   pendingSaveAction = action;
   const modal = document.getElementById("author-modal");
   const btns  = document.getElementById("author-btns");
@@ -1296,19 +1299,21 @@ function promptAuthorThenSave(action){
 async function selectAuthor(name){
   closeAuthorModal();
   if(!pendingSaveAction) return;
-  const action = pendingSaveAction;
+  const action  = pendingSaveAction;
+  const prevCfg = pendingPrevCfg;
   pendingSaveAction = null;
+  pendingPrevCfg   = null;
 
-  // Snapshot what changed before saving
-  const prevCfg = clone(cfg);
-  await action(); // run the actual save
+  await action(); // run the actual save (mutates cfg and calls saveCfg)
 
-  // Write to Firestore changeLog
+  // Write to Firestore changeLog — prevCfg was snapshotted before any mutation
   try {
+    const summary = describeChange(prevCfg, cfg);
+    console.log("[ChangeLog] Recording:", name, summary);
     await db.collection("changeLog").add({
       author:    name,
       timestamp: firebase.firestore.FieldValue.serverTimestamp(),
-      summary:   describeChange(prevCfg, cfg),
+      summary,
     });
   } catch(e){ console.error("Change log failed:", e); }
 }
@@ -1321,37 +1326,54 @@ function closeAuthorModal(){
 // Produce a human-readable summary of what changed
 function describeChange(before, after){
   const diffs = [];
-  // Fixed rules
+
   const bFixed = JSON.stringify(before.fixedRules||[]);
   const aFixed = JSON.stringify(after.fixedRules||[]);
   if(bFixed !== aFixed) diffs.push("Fixed rules updated");
-  // Rotating items
+
   const bRot = JSON.stringify(before.rotatingItems||[]);
   const aRot = JSON.stringify(after.rotatingItems||[]);
   if(bRot !== aRot) diffs.push("Rotating items updated");
-  // Filler topics
+
   const bFill = JSON.stringify(before.fillerTopics||[]);
   const aFill = JSON.stringify(after.fillerTopics||[]);
   if(bFill !== aFill) diffs.push("Filler topics updated");
-  // Platforms
+
   const bPlat = JSON.stringify(before.platforms||[]);
   const aPlat = JSON.stringify(after.platforms||[]);
   if(bPlat !== aPlat) diffs.push("Platforms updated");
-  // Day overrides
-  const bOver = JSON.stringify(before.dayOverrides||{});
-  const aOver = JSON.stringify(after.dayOverrides||{});
-  if(bOver !== aOver){
-    // Find which dates changed
-    const allDates = new Set([...Object.keys(before.dayOverrides||{}), ...Object.keys(after.dayOverrides||{})]);
-    const changedDates = [...allDates].filter(d => JSON.stringify((before.dayOverrides||{})[d]) !== JSON.stringify((after.dayOverrides||{})[d]));
-    if(changedDates.length) diffs.push(`Day overrides: ${changedDates.join(", ")}`);
+
+  const bMen = JSON.stringify(before.mentionSettings||{});
+  const aMen = JSON.stringify(after.mentionSettings||{});
+  if(bMen !== aMen) diffs.push("Notification settings updated");
+
+  // Day overrides — show human-readable dates
+  const bOver = before.dayOverrides || {};
+  const aOver = after.dayOverrides || {};
+  if(JSON.stringify(bOver) !== JSON.stringify(aOver)){
+    const allDates = new Set([...Object.keys(bOver), ...Object.keys(aOver)]);
+    const changed  = [...allDates].filter(d => JSON.stringify(bOver[d]) !== JSON.stringify(aOver[d]));
+    changed.forEach(dateStr => {
+      const prev = bOver[dateStr], next = aOver[dateStr];
+      if(!prev && next)  diffs.push(`Added override for ${dateStr}`);
+      else if(prev && !next) diffs.push(`Cleared override for ${dateStr}`);
+      else {
+        const details = [];
+        if(prev?.topic !== next?.topic) details.push(`topic → "${next?.topic || '(removed)'}"`);
+        if(JSON.stringify(prev?.removedTasks) !== JSON.stringify(next?.removedTasks)) details.push("task removed");
+        if(JSON.stringify(prev?.addedTasks) !== JSON.stringify(next?.addedTasks)) details.push("task added");
+        diffs.push(`${dateStr}: ${details.join(", ") || "changed"}`);
+      }
+    });
   }
+
   // Shabbos notes
   const bShab = JSON.stringify(before.shabbosNotes||{});
   const aShab = JSON.stringify(after.shabbosNotes||{});
   if(bShab !== aShab) diffs.push("Shabbos notes updated");
 
-  return diffs.length ? diffs.join(" · ") : "Settings reset to defaults";
+  console.log("[ChangeLog] Diff:", diffs);
+  return diffs.length ? diffs.join(" · ") : "General settings update";
 }
 
 // Show change log modal
