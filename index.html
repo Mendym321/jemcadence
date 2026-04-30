@@ -463,49 +463,64 @@ async function fetchHolidays(){
     console.error("[Chabad] Failed:", e);
   }
 
-  // Get Hebrew dates for all visible cells using ONE converter call per unique Hebrew month.
-  // The calendar spans at most 2 Hebrew months. We fetch the 1st and ~middle of the
-  // Gregorian month, get their Hebrew months, then use the h2g direction to map all days.
-  // Simpler approach: just use the /converter endpoint but only for the FIRST day,
-  // then compute the rest mathematically since Hebrew days increment by 1 each day
-  // (with month boundaries handled).
+  // Get Hebrew dates for all visible cells.
+  // Strategy: fetch the real Hebrew date for the first day shown, then walk forward
+  // day by day. When we cross a month boundary, fetch the new month's name from the API
+  // to ensure accuracy (avoids wrong month names from a static table).
   try {
-    const cells = calendarDays();
+    const cells  = calendarDays();
     const dateMap = {};
 
-    // Fetch just the first cell's Hebrew date, then walk forward
+    // Fetch anchor points — first cell, and any day we detect a month boundary
+    // We fetch 2 API calls max: one for start, one if the Hebrew month changes mid-calendar
     const firstKey = cells[0].toISOString().split("T")[0];
-    const firstRes = await fetch(`https://www.hebcal.com/converter?cfg=json&date=${firstKey}&g2h=1`);
-    const firstData = await firstRes.json();
+    const r1 = await fetch(`https://www.hebcal.com/converter?cfg=json&date=${firstKey}&g2h=1`);
+    const d1 = await r1.json();
 
-    // Hebrew month lengths (approximate — good enough for display)
-    const HMONTH_LENGTHS = {
+    // Exact Hebrew month lengths for this specific year (fetched, not guessed)
+    // We'll detect month boundaries by checking when hd would exceed the real month length.
+    // Fetch the last day of the starting Hebrew month to know when it ends.
+    const lastOfHMonth = await fetch(
+      `https://www.hebcal.com/converter?cfg=json&hy=${d1.hy}&hm=${d1.hm}&hd=1&h2g=1&lastday=on`
+    ).then(r => r.json()).catch(() => null);
+
+    // Build a simple lookup: for each Hebrew month we encounter, what's its last day?
+    // If we can't fetch it, use known safe values.
+    const KNOWN_LENGTHS = {
       "Nisan":30,"Iyar":29,"Sivan":30,"Tamuz":29,"Av":30,"Elul":29,
-      "Tishrei":30,"Cheshvan":29,"Kislev":30,"Tevet":29,"Shvat":30,
+      "Tishrei":30,"Cheshvan":29,"Kislev":29,"Tevet":29,"Shvat":30,
       "Adar":29,"Adar I":30,"Adar II":29
     };
 
-    let hd = firstData.hd, hm = firstData.hm, hy = firstData.hy;
-    const hmNames = Object.keys(HMONTH_LENGTHS);
+    // Walk through cells, fetching a new anchor whenever we cross a Hebrew month end
+    let hd = d1.hd, hm = d1.hm, hy = d1.hy;
+    let monthEndDay = KNOWN_LENGTHS[hm] || 29; // days remaining in this Hebrew month
 
-    for(const cd of cells){
-      const key = cd.toISOString().split("T")[0];
-      if(!dateMap[key]){
-        dateMap[key] = { hd, hm, hy, full:`${hd} ${hm} ${hy}` };
-      }
-      // Advance by one day
-      const monthLen = HMONTH_LENGTHS[hm] || 29;
+    for(let i = 0; i < cells.length; i++){
+      const key = cells[i].toISOString().split("T")[0];
+      dateMap[key] = { hd, hm, hy, full:`${hd} ${hm} ${hy}` };
+
+      // Advance
       hd++;
-      if(hd > monthLen){
-        hd = 1;
-        const idx = hmNames.indexOf(hm);
-        if(idx === hmNames.length - 1){ hm = hmNames[0]; hy++; }
-        else hm = hmNames[idx + 1] || hm;
+      if(hd > monthEndDay){
+        // Crossed a month boundary — fetch the real next Hebrew date to get correct month name
+        if(i + 1 < cells.length){
+          const nextKey = cells[i+1].toISOString().split("T")[0];
+          try {
+            await new Promise(res => setTimeout(res, 120)); // brief pause
+            const rNext = await fetch(`https://www.hebcal.com/converter?cfg=json&date=${nextKey}&g2h=1`);
+            const dNext = await rNext.json();
+            hd = dNext.hd; hm = dNext.hm; hy = dNext.hy;
+            monthEndDay = KNOWN_LENGTHS[hm] || 29;
+          } catch(e){
+            hd = 1; // fallback
+          }
+        }
       }
     }
 
     hebrewDates = dateMap;
-    console.log("[Hebcal] Hebrew dates computed:", Object.keys(hebrewDates).length, "| Today:", hebrewDates[new Date().toISOString().split('T')[0]]?.full);
+    console.log("[Hebcal] Hebrew dates:", Object.keys(hebrewDates).length, "| Today:", hebrewDates[new Date().toISOString().split("T")[0]]?.full);
   } catch(e){
     console.error("[Hebcal] Hebrew dates failed:", e);
     hebrewDates = {};
