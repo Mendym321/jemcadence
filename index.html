@@ -601,11 +601,15 @@ function cellMetaForDate(date){
     return { topic: note ? note.topic : "Shabbos", type:"shabbos", isPhoto:false, isShabbos:true, hasNote:!!note, note };
   }
 
-  // Fixed rule
+  // Fixed rule wins immediately — no rotating logic needed
   const fixed = cfg.fixedRules.find(r => r.dayOfWeek === dow);
+  if(fixed) return { topic:fixed.topic, type:"fixed", isPhoto:false, isShabbos:false };
 
-  // Check rotating items FIRST to know if this is a photo day
-  // (even if a holiday overrides the topic, we still want to know if photo applies)
+  // Holiday / Chabad override
+  const holiday = jewishHolidays[dateStr];
+
+  // Rotating items — use calendar day index from grid start (not posting slot count)
+  // everyNDays means every N calendar days (skipping Shabbos and fixed days)
   const slot      = postingSlotForDate(date);
   const photoDays = photoCapableDays();
   let rotatingMatch = null;
@@ -617,20 +621,16 @@ function cellMetaForDate(date){
       break;
     }
   }
+
   const isPhotoFromRotating = rotatingMatch && !!rotatingMatch.isPhotoDay && photoDays.includes(dow);
 
-  // Holiday / Chabad override — takes topic but respects photo day if applicable
-  const holiday = jewishHolidays[dateStr];
   if(holiday && holiday.topicOverride){
     const type = holiday.type === "chabad" ? "chabad" : "holiday";
     return { topic:holiday.label, type, isPhoto:isPhotoFromRotating, isShabbos:false };
   }
 
-  if(fixed) return { topic:fixed.topic, type:"fixed", isPhoto:false, isShabbos:false };
-
   if(rotatingMatch){
-    const isPhoto = isPhotoFromRotating;
-    return { topic:rotatingMatch.name, type:isPhoto?"photo":"rotating", isPhoto, isShabbos:false };
+    return { topic:rotatingMatch.name, type:isPhotoFromRotating?"photo":"rotating", isPhoto:isPhotoFromRotating, isShabbos:false };
   }
 
   // Filler
@@ -1346,40 +1346,39 @@ async function loadCfg(){
   try {
     const snap = await CFGDOC.get();
     setStatus("", false);
-    const loaded = (snap.exists && snap.data().value) ? snap.data().value : clone(DEFAULTS);
+    if(!snap.exists || !snap.data().value) return clone(DEFAULTS);
 
-    // Repair platforms — restore correct activeDays if stale
-    if(loaded.platforms){
-      loaded.platforms = loaded.platforms.map(p => {
-        const def = DEFAULTS.platforms.find(d => d.name === p.name);
-        if(def && (!p.activeDays || p.activeDays.length === 0) && def.activeDays.length > 0){
-          return { ...p, activeDays: def.activeDays };
-        }
-        return p;
-      });
-    }
+    const loaded = snap.data().value;
 
-    // Repair rotating items — restore isPhotoDay if missing
-    // Matches by name (including partial match for "Photo" items)
-    if(loaded.rotatingItems){
-      loaded.rotatingItems = loaded.rotatingItems.map(item => {
-        if(item.isPhotoDay !== undefined) return item; // already set, leave it
-        // Match by exact name or partial name
-        const def = DEFAULTS.rotatingItems.find(d =>
-          d.name === item.name ||
-          item.name.toLowerCase().includes("photo") ||
-          d.name.toLowerCase().includes(item.name.toLowerCase())
-        );
-        const isPhotoDay = def ? !!def.isPhotoDay : item.name.toLowerCase().includes("photo");
-        return { ...item, isPhotoDay };
-      });
-    }
-
-    return loaded;
+    // Deep merge: for any field missing from Firebase, fill from DEFAULTS.
+    // Never overwrite fields that the user has intentionally saved.
+    const merged = deepMerge(clone(DEFAULTS), loaded);
+    return merged;
   } catch(e){
     setStatus("Offline — using defaults", true);
     return clone(DEFAULTS);
   }
+}
+
+// Merge: 'base' provides defaults, 'override' wins for any key it has.
+// For arrays: override wins entirely (don't mix arrays).
+// For objects: recurse.
+function deepMerge(base, override){
+  if(override === undefined || override === null) return base;
+  if(Array.isArray(override)) return override; // user's array wins
+  if(typeof override !== "object") return override; // primitive wins
+  const result = { ...base };
+  for(const key of Object.keys(override)){
+    if(override[key] === undefined) continue;
+    if(Array.isArray(override[key])){
+      result[key] = override[key]; // user's array wins
+    } else if(typeof override[key] === "object" && typeof base[key] === "object" && !Array.isArray(base[key])){
+      result[key] = deepMerge(base[key], override[key]); // recurse into objects
+    } else {
+      result[key] = override[key]; // user's value wins
+    }
+  }
+  return result;
 }
 
 async function saveCfg(data){
