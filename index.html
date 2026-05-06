@@ -1323,7 +1323,8 @@ firebase.initializeApp({
   appId:             "1:740314160325:web:dc2e6e98047563a81764ac",
 });
 const db     = firebase.firestore();
-const CFGDOC = db.collection("schedule").doc("config");
+const CFGDOC   = db.collection("schedule").doc("config_v2");
+const CFG_VERSION = "v2"; // bump this whenever a breaking DEFAULTS change requires a fresh start
 
 function setStatus(msg, isError){
   const el = document.getElementById("sync-status");
@@ -1337,13 +1338,22 @@ async function loadCfg(){
   try {
     const snap = await CFGDOC.get();
     setStatus("", false);
-    if(!snap.exists || !snap.data().value) return clone(DEFAULTS);
 
-    const loaded = snap.data().value;
-
-    // Deep merge: for any field missing from Firebase, fill from DEFAULTS.
-    // Never overwrite fields that the user has intentionally saved.
-    const merged = deepMerge(clone(DEFAULTS), loaded);
+    let merged;
+    if(!snap.exists || !snap.data().value){
+      // No saved config — use DEFAULTS and save immediately
+      merged = clone(DEFAULTS);
+      await saveCfg(merged);
+      console.log("[Config] Fresh start — saved DEFAULTS to Firebase");
+    } else {
+      const loaded = snap.data().value;
+      merged = deepMerge(clone(DEFAULTS), loaded);
+      // If merge changed anything (e.g. added missing fields), save the repaired version back
+      if(JSON.stringify(merged) !== JSON.stringify(loaded)){
+        await saveCfg(merged);
+        console.log("[Config] Repaired and re-saved config to Firebase");
+      }
+    }
     return merged;
   } catch(e){
     setStatus("Offline — using defaults", true);
