@@ -312,10 +312,10 @@ const DEFAULTS = {
   // everyNDays = every N active posting days.
   // isPhotoDay is computed automatically — no need to set it here.
   rotatingItems: [
-    { name:"Archival Photo", everyNDays:7  },
-    { name:"Niggun",         everyNDays:10 },
-    { name:"Israel Update",  everyNDays:14 },
-    { name:"Self Help",      everyNDays:20 },
+    { name:"Archival Photo", isPhotoDay:true,  everyNDays:7  },
+    { name:"Niggun",         isPhotoDay:false, everyNDays:10 },
+    { name:"Israel Update",  isPhotoDay:false, everyNDays:14 },
+    { name:"Self Help",      isPhotoDay:false, everyNDays:20 },
   ],
 
   fillerTopics: [
@@ -600,10 +600,11 @@ function cellMetaForDate(date){
   const slot      = postingSlotForDate(date);
   const photoDays = photoCapableDays();
   for(const item of cfg.rotatingItems){
-    const n = item.everyNDays || 7;
+    const n      = item.everyNDays || 7;
     const offset = cfg.rotatingItems.indexOf(item);
     if(slot % n === offset % n){
-      const isPhoto = photoDays.includes(dow);
+      const isPhoto = !!item.isPhotoDay && photoDays.includes(dow);
+      console.log(`[Meta] ${localDateStr(date)} slot=${slot} item=${item.name} isPhotoDay=${item.isPhotoDay} dow=${dow} photoDays=${JSON.stringify(photoDays)} → isPhoto=${isPhoto}`);
       return { topic:item.name, type:isPhoto?"photo":"rotating", isPhoto, isShabbos:false };
     }
   }
@@ -1211,6 +1212,10 @@ function drawRotating(){
         <span style="font-size:0.72rem;color:var(--text-dim)">Every</span>
         <input type="number" min="1" class="finput" style="width:60px;text-align:center" value="${item.everyNDays||7}" onchange="cfg.rotatingItems[${i}].everyNDays=+this.value||1">
         <span style="font-size:0.72rem;color:var(--text-dim)">posting days</span>
+        <label style="display:flex;align-items:center;gap:5px;font-size:0.72rem;color:var(--text-mid);cursor:pointer;margin-left:8px;white-space:nowrap">
+          <input type="checkbox" ${item.isPhotoDay?"checked":""} onchange="cfg.rotatingItems[${i}].isPhotoDay=this.checked" style="width:13px;height:13px;accent-color:var(--red)">
+          Photo day
+        </label>
       </div>
     </div>
   `).join("") || `<div class="hint" style="text-align:center;padding:12px;border:1px dashed var(--border2);border-radius:8px">No rotating items yet.</div>`;
@@ -1319,16 +1324,25 @@ async function loadCfg(){
     setStatus("", false);
     const loaded = (snap.exists && snap.data().value) ? snap.data().value : clone(DEFAULTS);
 
-    // Repair platforms — if a saved platform has activeDays:[] but DEFAULTS has specific days,
-    // it means it was saved before we set the correct activeDays. Restore from DEFAULTS by name.
+    // Repair platforms — restore correct activeDays if stale
     if(loaded.platforms){
       loaded.platforms = loaded.platforms.map(p => {
         const def = DEFAULTS.platforms.find(d => d.name === p.name);
-        // If activeDays is empty but default has specific days, restore it
         if(def && (!p.activeDays || p.activeDays.length === 0) && def.activeDays.length > 0){
           return { ...p, activeDays: def.activeDays };
         }
         return p;
+      });
+    }
+
+    // Repair rotating items — restore isPhotoDay if missing
+    if(loaded.rotatingItems){
+      loaded.rotatingItems = loaded.rotatingItems.map(item => {
+        if(item.isPhotoDay === undefined){
+          const def = DEFAULTS.rotatingItems.find(d => d.name === item.name);
+          return { ...item, isPhotoDay: def ? !!def.isPhotoDay : false };
+        }
+        return item;
       });
     }
 
