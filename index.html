@@ -333,8 +333,9 @@ const DEFAULTS = {
 // Days where both WA and SM post = photo-capable days.
 // Computed from platforms config so it stays in sync if user edits platforms.
 function photoCapableDays(){
+  // Photo day requires BOTH WhatsApp and SM Video to be posting that day
   const wa = cfg.platforms.find(p => p.name === "WhatsApp");
-  const sm = cfg.platforms.find(p => p.photoContent && p.name !== "WhatsApp");
+  const sm = cfg.platforms.find(p => p.name === "SM Video");
   if(!wa || !sm) return [];
   const waDays = wa.activeDays.length === 0 ? [0,1,2,3,4,5] : wa.activeDays;
   const smDays = sm.activeDays.length === 0 ? [0,1,2,3,4,5] : sm.activeDays;
