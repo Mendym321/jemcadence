@@ -565,26 +565,17 @@ function calendarDays(){
   return days;
 }
 
-// Returns the slot index for a given date (for rotating item calculation).
-// Slot = count of non-Shabbos, non-fixed days from the very beginning of the month
-// up to (but not including) this date.
-// Returns the slot index for a given date.
-// Counts active posting days (non-Shabbos, non-fixed) from the first Sunday
-// of the grid for that date's own month — independent of what's currently viewed.
-function postingSlotForDate(date){
-  const y = date.getFullYear(), m = date.getMonth();
-  const firstOfMonth = new Date(y, m, 1);
-  const gridStart    = new Date(firstOfMonth);
-  gridStart.setDate(firstOfMonth.getDate() - firstOfMonth.getDay());
+// Fixed epoch: first Sunday of Jan 2026. All slot counts start from here,
+// making the rotation continuous across months forever.
+const SLOT_EPOCH = new Date(2026, 0, 4); // Sun Jan 4 2026
 
+// Returns how many active posting days have elapsed from SLOT_EPOCH to (not including) date.
+// Active = not Shabbos, not a fixed-rule day.
+function postingSlotForDate(date){
   let slot = 0;
-  const cur = new Date(gridStart);
+  const cur = new Date(SLOT_EPOCH);
   while(localDateStr(cur) < localDateStr(date)){
-    const dow    = cur.getDay();
-    const curStr = localDateStr(cur);
-    // Skip Shabbos and fixed-rule days — they don't consume rotating slots
-    // NOTE: we do NOT skip holidays — holidays consume a slot (the rotating item
-    // still "fires" on that day, the holiday just overrides the display topic)
+    const dow = cur.getDay();
     if(dow !== 6 && !cfg.fixedRules.find(r => r.dayOfWeek === dow)) slot++;
     cur.setDate(cur.getDate() + 1);
   }
@@ -1361,21 +1352,33 @@ async function loadCfg(){
 }
 
 // Merge: 'base' provides defaults, 'override' wins for any key it has.
-// For arrays: override wins entirely (don't mix arrays).
+// For arrays: override wins UNLESS the array is empty and base has values
+//   (empty array in Firebase = field was never intentionally cleared by user,
+//    just a stale save before the field existed)
 // For objects: recurse.
 function deepMerge(base, override){
   if(override === undefined || override === null) return base;
-  if(Array.isArray(override)) return override; // user's array wins
-  if(typeof override !== "object") return override; // primitive wins
+  if(Array.isArray(override)){
+    // If override is empty but base has values, keep base (Firebase had stale empty array)
+    if(override.length === 0 && Array.isArray(base) && base.length > 0) return base;
+    return override;
+  }
+  if(typeof override !== "object") return override;
   const result = { ...base };
   for(const key of Object.keys(override)){
     if(override[key] === undefined) continue;
     if(Array.isArray(override[key])){
-      result[key] = override[key]; // user's array wins
+      const baseArr = base[key];
+      // Protect critical arrays: if saved as empty but default has values, use default
+      if(override[key].length === 0 && Array.isArray(baseArr) && baseArr.length > 0){
+        result[key] = baseArr;
+      } else {
+        result[key] = override[key];
+      }
     } else if(typeof override[key] === "object" && typeof base[key] === "object" && !Array.isArray(base[key])){
-      result[key] = deepMerge(base[key], override[key]); // recurse into objects
+      result[key] = deepMerge(base[key], override[key]);
     } else {
-      result[key] = override[key]; // user's value wins
+      result[key] = override[key];
     }
   }
   return result;
@@ -1629,6 +1632,8 @@ async function undoSave(){
   console.log("[Init] Starting...");
   [cfg] = await Promise.all([loadCfg(), fetchHolidays()]);
   console.log("[Init] cfg loaded:", cfg ? "OK" : "FAILED");
+  console.log("[Init] fixedRules:", JSON.stringify(cfg.fixedRules));
+  console.log("[Init] rotatingItems:", JSON.stringify(cfg.rotatingItems?.map(r => ({name:r.name, isPhotoDay:r.isPhotoDay, everyNDays:r.everyNDays}))));
   console.log("[Init] hebrewDates count:", Object.keys(hebrewDates).length);
   console.log("[Init] jewishHolidays count:", Object.keys(jewishHolidays).length);
   buildCalendar();
