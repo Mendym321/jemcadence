@@ -357,6 +357,11 @@ const DAY_CHIPS = ["Sun","Mon","Tue","Wed","Thu","Fri"];
 function clone(x){ return JSON.parse(JSON.stringify(x)); }
 
 // Always use local date, never UTC — avoids timezone-off-by-one for users outside UTC
+function parseLocalDate(str){
+  // Parse YYYY-MM-DD as local time, not UTC
+  const [y,m,d] = str.split("-").map(Number);
+  return new Date(y, m-1, d);
+}
 function localDateStr(date){
   const y = date.getFullYear();
   const m = String(date.getMonth()+1).padStart(2,"0");
@@ -617,10 +622,12 @@ function cellMetaForDate(date){
 // Which tasks run today, with per-day overrides applied?
 function tasksForDay(meta, date){
   const d = date.getDay();
-  const dateStr = date.toISOString().split('T')[0];
+  const dateStr = localDateStr(date);
   if(meta.isShabbos) return [];
   const overrides = (cfg.dayOverrides || {})[dateStr] || {};
   const removed   = new Set(overrides.removedTasks || []);
+
+  console.log(`[Tasks] ${dateStr} dow=${d} platforms:`, cfg.platforms.map(p => `${p.name}:${JSON.stringify(p.activeDays)}`).join(", "));
 
   // Base tasks from platforms
   let tasks = cfg.platforms
@@ -720,7 +727,7 @@ function inspectDate(fd){
   if(weekBtn){
     weekBtn.style.display = "block";
     const today = new Date(); today.setHours(0,0,0,0);
-    const isFuture = new Date(selected.dateStr) > today;
+    const isFuture = parseLocalDate(selected.dateStr) > today;
     weekBtn.innerText = isFuture ? "Push full week" : "Push remaining week";
   }
 
@@ -825,8 +832,8 @@ const TEAM_ROSTER = [
 
 // Push a single date to Monday — returns list of created item IDs
 async function pushDateToMonday(dateStr){
-  const date     = new Date(dateStr);
-  const meta     = cellMetaForDate(date);
+  const date = parseLocalDate(dateStr);
+  const meta = cellMetaForDate(date);
   if(meta.isShabbos) return [];
 
   const overrides = (cfg.dayOverrides || {})[dateStr] || {};
@@ -914,7 +921,7 @@ async function pushWeekToMonday(){
   setTimeout(() => {
     btn.disabled = false;
     const t = new Date(); t.setHours(0,0,0,0);
-    btn.innerText = new Date(selected.dateStr) > t ? "Push full week" : "Push remaining week";
+    btn.innerText = parseLocalDate(selected.dateStr) > t ? "Push full week" : "Push remaining week";
   }, 4000);
 }
 function buildCalendar(){
@@ -990,7 +997,7 @@ function buildCalendar(){
     const first = days.find(d => d.getMonth()===viewDate.getMonth());
     if(first) selected = { d: first.getDay(), dateStr: localDateStr(first) };
   }
-  inspectDate(new Date(selected.dateStr));
+  inspectDate(parseLocalDate(selected.dateStr));
 }
 
 // ─────────────────────────────────────────────
@@ -1023,7 +1030,7 @@ async function saveTopic(dateStr){
     const ov = getOverride(dateStr);
     ov.topic = val;
     await saveCfg(cfg);
-    inspectDate(new Date(dateStr));
+    inspectDate(parseLocalDate(dateStr));
     buildCalendar();
   });
 }
@@ -1039,7 +1046,7 @@ async function removeTask(dateStr, taskId){
       if(!ov.removedTasks.includes(taskId)) ov.removedTasks.push(taskId);
     }
     await saveCfg(cfg);
-    inspectDate(new Date(dateStr));
+    inspectDate(parseLocalDate(dateStr));
   });
 }
 
@@ -1097,7 +1104,7 @@ async function addTask(dateStr){
     if(!ov.addedTasks) ov.addedTasks = [];
     ov.addedTasks.push({ label, colorIdx });
     await saveCfg(cfg);
-    inspectDate(new Date(dateStr));
+    inspectDate(parseLocalDate(dateStr));
   });
 }
 
@@ -1106,7 +1113,7 @@ async function clearDayOverrides(dateStr){
     if(!cfg.dayOverrides) return;
     delete cfg.dayOverrides[dateStr];
     await saveCfg(cfg);
-    inspectDate(new Date(dateStr));
+    inspectDate(parseLocalDate(dateStr));
     buildCalendar();
   });
 }
@@ -1119,7 +1126,7 @@ async function saveShabbosNote(dateStr){
     cfg.shabbosNotes[dateStr] = { topic: val };
     try { await saveCfg(cfg); } catch(e){ alert("Save failed: " + e.message); return; }
     buildCalendar();
-    inspectDate(new Date(dateStr));
+    inspectDate(parseLocalDate(dateStr));
   });
 }
 
@@ -1129,7 +1136,7 @@ async function clearShabbosNote(dateStr){
     delete cfg.shabbosNotes[dateStr];
     try { await saveCfg(cfg); } catch(e){ alert("Save failed: " + e.message); return; }
     buildCalendar();
-    inspectDate(new Date(dateStr));
+    inspectDate(parseLocalDate(dateStr));
   });
 }
 
