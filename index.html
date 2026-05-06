@@ -1336,13 +1336,18 @@ async function loadCfg(){
     }
 
     // Repair rotating items — restore isPhotoDay if missing
+    // Matches by name (including partial match for "Photo" items)
     if(loaded.rotatingItems){
       loaded.rotatingItems = loaded.rotatingItems.map(item => {
-        if(item.isPhotoDay === undefined){
-          const def = DEFAULTS.rotatingItems.find(d => d.name === item.name);
-          return { ...item, isPhotoDay: def ? !!def.isPhotoDay : false };
-        }
-        return item;
+        if(item.isPhotoDay !== undefined) return item; // already set, leave it
+        // Match by exact name or partial name
+        const def = DEFAULTS.rotatingItems.find(d =>
+          d.name === item.name ||
+          item.name.toLowerCase().includes("photo") ||
+          d.name.toLowerCase().includes(item.name.toLowerCase())
+        );
+        const isPhotoDay = def ? !!def.isPhotoDay : item.name.toLowerCase().includes("photo");
+        return { ...item, isPhotoDay };
       });
     }
 
