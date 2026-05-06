@@ -567,15 +567,22 @@ function calendarDays(){
 // Returns the slot index for a given date (for rotating item calculation).
 // Slot = count of non-Shabbos, non-fixed days from the very beginning of the month
 // up to (but not including) this date.
+// Returns the slot index for a given date.
+// Counts active posting days (non-Shabbos, non-fixed) from the first Sunday
+// of the grid for that date's own month — independent of what's currently viewed.
 function postingSlotForDate(date){
-  const y = viewDate.getFullYear(), m = viewDate.getMonth();
+  // Build the grid start for the date's actual month
+  const y = date.getFullYear(), m = date.getMonth();
+  const firstOfMonth = new Date(y, m, 1);
+  const gridStart    = new Date(firstOfMonth);
+  gridStart.setDate(firstOfMonth.getDate() - firstOfMonth.getDay()); // back to Sunday
+
   let slot = 0;
-  // Count from the 1st of the month to this date
-  const cur = new Date(y, m, 1);
-  while(cur < date){
+  const cur = new Date(gridStart);
+  while(localDateStr(cur) < localDateStr(date)){
     const dow = cur.getDay();
     if(dow !== 6 && !cfg.fixedRules.find(r => r.dayOfWeek === dow)) slot++;
-    cur.setDate(cur.getDate()+1);
+    cur.setDate(cur.getDate() + 1);
   }
   return slot;
 }
@@ -609,7 +616,6 @@ function cellMetaForDate(date){
     const offset = cfg.rotatingItems.indexOf(item);
     if(slot % n === offset % n){
       const isPhoto = !!item.isPhotoDay && photoDays.includes(dow);
-      console.log(`[Meta] ${localDateStr(date)} slot=${slot} item=${item.name} isPhotoDay=${item.isPhotoDay} dow=${dow} photoDays=${JSON.stringify(photoDays)} → isPhoto=${isPhoto}`);
       return { topic:item.name, type:isPhoto?"photo":"rotating", isPhoto, isShabbos:false };
     }
   }
@@ -626,8 +632,6 @@ function tasksForDay(meta, date){
   if(meta.isShabbos) return [];
   const overrides = (cfg.dayOverrides || {})[dateStr] || {};
   const removed   = new Set(overrides.removedTasks || []);
-
-  console.log(`[Tasks] ${dateStr} dow=${d} platforms:`, cfg.platforms.map(p => `${p.name}:${JSON.stringify(p.activeDays)}`).join(", "));
 
   // Base tasks from platforms
   let tasks = cfg.platforms
