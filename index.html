@@ -571,16 +571,19 @@ function calendarDays(){
 // Counts active posting days (non-Shabbos, non-fixed) from the first Sunday
 // of the grid for that date's own month — independent of what's currently viewed.
 function postingSlotForDate(date){
-  // Build the grid start for the date's actual month
   const y = date.getFullYear(), m = date.getMonth();
   const firstOfMonth = new Date(y, m, 1);
   const gridStart    = new Date(firstOfMonth);
-  gridStart.setDate(firstOfMonth.getDate() - firstOfMonth.getDay()); // back to Sunday
+  gridStart.setDate(firstOfMonth.getDate() - firstOfMonth.getDay());
 
   let slot = 0;
   const cur = new Date(gridStart);
   while(localDateStr(cur) < localDateStr(date)){
-    const dow = cur.getDay();
+    const dow    = cur.getDay();
+    const curStr = localDateStr(cur);
+    // Skip Shabbos and fixed-rule days — they don't consume rotating slots
+    // NOTE: we do NOT skip holidays — holidays consume a slot (the rotating item
+    // still "fires" on that day, the holiday just overrides the display topic)
     if(dow !== 6 && !cfg.fixedRules.find(r => r.dayOfWeek === dow)) slot++;
     cur.setDate(cur.getDate() + 1);
   }
@@ -597,27 +600,36 @@ function cellMetaForDate(date){
     return { topic: note ? note.topic : "Shabbos", type:"shabbos", isPhoto:false, isShabbos:true, hasNote:!!note, note };
   }
 
-  // Holiday / Chabad override
-  const holiday = jewishHolidays[dateStr];
-  if(holiday && holiday.topicOverride){
-    const isPhoto = photoCapableDays().includes(dow);
-    return { topic:holiday.label, type:holiday.type==="chabad"?"chabad":"holiday", isPhoto, isShabbos:false };
-  }
-
   // Fixed rule
   const fixed = cfg.fixedRules.find(r => r.dayOfWeek === dow);
-  if(fixed) return { topic:fixed.topic, type:"fixed", isPhoto:false, isShabbos:false };
 
-  // Rotating items — use slot based on actual date position in month
+  // Check rotating items FIRST to know if this is a photo day
+  // (even if a holiday overrides the topic, we still want to know if photo applies)
   const slot      = postingSlotForDate(date);
   const photoDays = photoCapableDays();
+  let rotatingMatch = null;
   for(const item of cfg.rotatingItems){
     const n      = item.everyNDays || 7;
     const offset = cfg.rotatingItems.indexOf(item);
     if(slot % n === offset % n){
-      const isPhoto = !!item.isPhotoDay && photoDays.includes(dow);
-      return { topic:item.name, type:isPhoto?"photo":"rotating", isPhoto, isShabbos:false };
+      rotatingMatch = item;
+      break;
     }
+  }
+  const isPhotoFromRotating = rotatingMatch && !!rotatingMatch.isPhotoDay && photoDays.includes(dow);
+
+  // Holiday / Chabad override — takes topic but respects photo day if applicable
+  const holiday = jewishHolidays[dateStr];
+  if(holiday && holiday.topicOverride){
+    const type = holiday.type === "chabad" ? "chabad" : "holiday";
+    return { topic:holiday.label, type, isPhoto:isPhotoFromRotating, isShabbos:false };
+  }
+
+  if(fixed) return { topic:fixed.topic, type:"fixed", isPhoto:false, isShabbos:false };
+
+  if(rotatingMatch){
+    const isPhoto = isPhotoFromRotating;
+    return { topic:rotatingMatch.name, type:isPhoto?"photo":"rotating", isPhoto, isShabbos:false };
   }
 
   // Filler
