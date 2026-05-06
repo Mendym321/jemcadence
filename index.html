@@ -356,6 +356,14 @@ const DAY_CHIPS = ["Sun","Mon","Tue","Wed","Thu","Fri"];
 
 function clone(x){ return JSON.parse(JSON.stringify(x)); }
 
+// Always use local date, never UTC — avoids timezone-off-by-one for users outside UTC
+function localDateStr(date){
+  const y = date.getFullYear();
+  const m = String(date.getMonth()+1).padStart(2,"0");
+  const d = String(date.getDate()).padStart(2,"0");
+  return `${y}-${m}-${d}`;
+}
+
 // ─────────────────────────────────────────────
 // JEWISH HOLIDAYS (fetched from Hebcal on load)
 // Map of "YYYY-MM-DD" -> holiday name string
@@ -520,7 +528,7 @@ async function fetchHolidays(){
     }
 
     hebrewDates = dateMap;
-    console.log("[Hebcal] Hebrew dates:", Object.keys(hebrewDates).length, "| Today:", hebrewDates[new Date().toISOString().split("T")[0]]?.full);
+    console.log("[Hebcal] Hebrew dates:", Object.keys(hebrewDates).length, "| Today:", hebrewDates[localDateStr(new Date())]?.full);
   } catch(e){
     console.error("[Hebcal] Hebrew dates failed:", e);
     hebrewDates = {};
@@ -570,7 +578,7 @@ function postingSlotForDate(date){
 // What topic and type does this cell get?
 function cellMetaForDate(date){
   const dow     = date.getDay();
-  const dateStr = date.toISOString().split("T")[0];
+  const dateStr = localDateStr(date);
 
   if(dow === 6){
     const note = (cfg.shabbosNotes || {})[dateStr];
@@ -654,7 +662,7 @@ function tasksForDay(meta, date){
 function inspect(d, w){ inspectDate(dateOfCell(w, d)); }
 function inspectDate(fd){
   const d = fd.getDay();
-  selected = { d, dateStr: fd.toISOString().split("T")[0] };
+  selected = { d, dateStr: localDateStr(fd) };
 
   document.querySelectorAll(".day-cell").forEach(c => c.classList.remove("sel"));
   const cell = document.querySelector(`[data-date="${selected.dateStr}"]`);
@@ -893,7 +901,7 @@ async function pushWeekToMonday(){
     d.setDate(sunday.getDate() + i);
     // Skip past days only if we're in the current week
     if(!isFutureWeek && d < today) continue;
-    const dateStr = d.toISOString().split("T")[0];
+    const dateStr = localDateStr(d);
     console.log("[Push Week] Pushing:", dateStr);
     try {
       const ids = await pushDateToMonday(dateStr);
@@ -931,7 +939,7 @@ function buildCalendar(){
     const isCurrentMonthCell = cd.getMonth() === viewDate.getMonth();
     const meta    = cellMetaForDate(cd);
     const isToday = cd.toDateString() === now.toDateString();
-    const dateStr = cd.toISOString().split("T")[0];
+    const dateStr = localDateStr(cd);
       const holidayObj = jewishHolidays[dateStr] || null;
       const holidayLabel = holidayObj ? holidayObj.label : null;
       const holidayType  = holidayObj ? holidayObj.type  : null;
@@ -979,7 +987,7 @@ function buildCalendar(){
   if(!isCurrentMonth){
     const days = calendarDays();
     const first = days.find(d => d.getMonth()===viewDate.getMonth());
-    if(first) selected = { d: first.getDay(), dateStr: first.toISOString().split("T")[0] };
+    if(first) selected = { d: first.getDay(), dateStr: localDateStr(first) };
   }
   inspectDate(new Date(selected.dateStr));
 }
@@ -1309,7 +1317,22 @@ async function loadCfg(){
   try {
     const snap = await CFGDOC.get();
     setStatus("", false);
-    return (snap.exists && snap.data().value) ? snap.data().value : clone(DEFAULTS);
+    const loaded = (snap.exists && snap.data().value) ? snap.data().value : clone(DEFAULTS);
+
+    // Repair platforms — if a saved platform has activeDays:[] but DEFAULTS has specific days,
+    // it means it was saved before we set the correct activeDays. Restore from DEFAULTS by name.
+    if(loaded.platforms){
+      loaded.platforms = loaded.platforms.map(p => {
+        const def = DEFAULTS.platforms.find(d => d.name === p.name);
+        // If activeDays is empty but default has specific days, restore it
+        if(def && (!p.activeDays || p.activeDays.length === 0) && def.activeDays.length > 0){
+          return { ...p, activeDays: def.activeDays };
+        }
+        return p;
+      });
+    }
+
+    return loaded;
   } catch(e){
     setStatus("Offline — using defaults", true);
     return clone(DEFAULTS);
